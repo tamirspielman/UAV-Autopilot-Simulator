@@ -8,7 +8,7 @@ Author: Advanced Autopilot System
 Python 3.8+ Required
 
 Dependencies:
-pip install numpy scipy matplotlib pandas gym stable-baselines3 filterpy pygame plotly dash
+pip install numpy scipy matplotlib pandas gymnasium stable-baselines3 filterpy pygame plotly dash dash-bootstrap-components
 """
 
 import numpy as np
@@ -23,10 +23,19 @@ import time
 import json
 import logging
 from abc import ABC, abstractmethod
+import os
 
-# For RL components
-import gym
-from gym import spaces
+# For RL components - using Gymnasium instead of Gym
+try:
+    import gymnasium as gym
+    from gymnasium import spaces
+    HAS_GYMNASIUM = True
+except ImportError:
+    import gym
+    from gym import spaces
+    HAS_GYMNASIUM = False
+    print("Warning: Using legacy Gym. Consider upgrading to Gymnasium.")
+
 import torch
 import torch.nn as nn
 
@@ -37,7 +46,12 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import dash
 from dash import dcc, html, Input, Output
-import dash_bootstrap_components as dbc
+try:
+    import dash_bootstrap_components as dbc
+    HAS_DBC = True
+except ImportError:
+    HAS_DBC = False
+    print("dash_bootstrap_components not installed. Using basic Dash components.")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -676,13 +690,13 @@ class UAVEnvironment(gym.Env):
         self.sensor_model = SensorModel()
         self.dt = 0.01
         
-        # State and action spaces
+        # State and action spaces - use float32 to avoid Gym warnings
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(18,), dtype=np.float32
         )
         self.action_space = spaces.Box(
-            low=np.array([0, -1, -1, -1]),
-            high=np.array([1, 1, 1, 1]),
+            low=np.array([0, -1, -1, -1], dtype=np.float32),
+            high=np.array([1, 1, 1, 1], dtype=np.float32),
             dtype=np.float32
         )
         
@@ -693,17 +707,31 @@ class UAVEnvironment(gym.Env):
         # Target position for training
         self.target_position = np.array([0, 0, -10])  # 10m altitude
         
+        # Track previous action for smoothness penalty
+        self.prev_action = None
+        
         self.reset()
         
-    def reset(self):
+    def reset(self, seed=None, options=None):
         """Reset environment to initial state"""
+        if seed is not None:
+            super().reset(seed=seed)
+            
         self.state = UAVState()
         self.state.position = np.array([0, 0, -1])  # Start 1m above ground
         self.current_step = 0
-        return self._get_observation()
+        self.prev_action = None
+        
+        if HAS_GYMNASIUM:
+            return self._get_observation(), {}
+        else:
+            return self._get_observation()
     
     def step(self, action: np.ndarray):
         """Execute one environment step"""
+        # Store action for reward calculation
+        current_action = action.copy()
+        
         # Apply action
         self.state = self.dynamics.update(self.state, action, self.dt)
         
@@ -711,7 +739,7 @@ class UAVEnvironment(gym.Env):
         obs = self._get_observation()
         
         # Calculate reward
-        reward = self._calculate_reward()
+        reward = self._calculate_reward(current_action)
         
         # Check termination
         done = self._is_done()
@@ -720,7 +748,10 @@ class UAVEnvironment(gym.Env):
         
         info = {'state': self.state.to_dict()}
         
-        return obs, reward, done, info
+        if HAS_GYMNASIUM:
+            return obs, reward, done, False, info
+        else:
+            return obs, reward, done, info
     
     def _get_observation(self) -> np.ndarray:
         """Get observation vector from state"""
@@ -737,7 +768,7 @@ class UAVEnvironment(gym.Env):
         
         return obs.astype(np.float32)
     
-    def _calculate_reward(self) -> float:
+    def _calculate_reward(self, action: np.ndarray) -> float:
         """Calculate reward for RL training"""
         # Position error
         pos_error = np.linalg.norm(self.state.position - self.target_position)
@@ -750,13 +781,13 @@ class UAVEnvironment(gym.Env):
         orient_penalty = -0.1 * np.linalg.norm(self.state.orientation[:2])  # roll and pitch
         
         # Control smoothness penalty
-        if hasattr(self, 'prev_action'):
-            action_diff = np.linalg.norm(self.prev_action - self._last_action)
+        if self.prev_action is not None:
+            action_diff = np.linalg.norm(self.prev_action - action)
             smooth_penalty = -0.01 * action_diff
         else:
             smooth_penalty = 0
             
-        self.prev_action = self._last_action
+        self.prev_action = action.copy()
         
         # Total reward
         total_reward = pos_reward + vel_penalty + orient_penalty + smooth_penalty
@@ -831,6 +862,7 @@ class RLAutopilot:
     
     def __init__(self, model_path: Optional[str] = None):
         self.env = UAVEnvironment()
+        self.policy = None
         
         if model_path and os.path.exists(model_path):
             self.load_model(model_path)
@@ -843,6 +875,10 @@ class RLAutopilot:
             
     def compute_control(self, observation: np.ndarray) -> np.ndarray:
         """Compute control action from observation"""
+        if self.policy is None:
+            # Return hover command if no policy loaded
+            return np.array([0.5, 0, 0, 0])
+            
         with torch.no_grad():
             obs_tensor = torch.FloatTensor(observation).unsqueeze(0)
             action_mean, _ = self.policy(obs_tensor)
@@ -859,12 +895,19 @@ class RLAutopilot:
         # This is a simplified training loop
         # In practice, you would use stable-baselines3 PPO implementation
         for episode in range(total_timesteps // 1000):
-            obs = self.env.reset()
+            if HAS_GYMNASIUM:
+                obs, _ = self.env.reset()
+            else:
+                obs = self.env.reset()
             episode_reward = 0
             
             for step in range(1000):
                 action = self.compute_control(obs)
-                obs, reward, done, info = self.env.step(action)
+                if HAS_GYMNASIUM:
+                    obs, reward, terminated, truncated, info = self.env.step(action)
+                    done = terminated or truncated
+                else:
+                    obs, reward, done, info = self.env.step(action)
                 episode_reward += reward
                 
                 if done:
@@ -875,7 +918,8 @@ class RLAutopilot:
                 
     def save_model(self, path: str):
         """Save trained model"""
-        torch.save(self.policy.state_dict(), path)
+        if self.policy is not None:
+            torch.save(self.policy.state_dict(), path)
         
     def load_model(self, path: str):
         """Load trained model"""
@@ -888,7 +932,7 @@ class RLAutopilot:
 
 
 # ============================================================================
-# PART 5: FLIGHT CONTROLLER AND MISSION MANAGEMENT (Continued)
+# PART 5: FLIGHT CONTROLLER AND MISSION MANAGEMENT
 # ============================================================================
 
 class FlightController:
@@ -1164,7 +1208,13 @@ class UAVDashboard:
     
     def __init__(self, flight_controller: FlightController):
         self.fc = flight_controller
-        self.app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
+        
+        # Create app with or without bootstrap components
+        if HAS_DBC:
+            self.app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
+        else:
+            self.app = dash.Dash(__name__)
+            
         self.setup_layout()
         self.setup_callbacks()
         
@@ -1175,107 +1225,173 @@ class UAVDashboard:
         
     def setup_layout(self):
         """Setup the dashboard layout"""
-        self.app.layout = dbc.Container([
-            dbc.Row([
-                dbc.Col(html.H1("AI-Based UAV Autopilot Simulator", 
-                               className="text-center mb-4"), width=12)
-            ]),
-            
-            # Flight controls and telemetry
-            dbc.Row([
-                # Flight controls
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardHeader("Flight Controls"),
-                        dbc.CardBody([
-                            dbc.Row([
-                                dbc.Col([
-                                    html.H5("Flight Mode"),
-                                    dcc.Dropdown(
-                                        id='flight-mode-dropdown',
-                                        options=[{'label': mode.value.upper(), 'value': mode.value} 
-                                                for mode in FlightMode],
-                                        value=FlightMode.STABILIZE.value
-                                    ),
-                                ], width=6),
-                                dbc.Col([
-                                    html.H5("Altitude Setpoint (m)"),
-                                    dcc.Slider(
-                                        id='altitude-slider',
-                                        min=1, max=100, step=1, value=10,
-                                        marks={i: str(i) for i in range(0, 101, 10)}
-                                    ),
-                                ], width=6)
-                            ]),
-                            html.Hr(),
-                            dbc.Row([
-                                dbc.Col([
-                                    html.H5("Manual Control"),
-                                    dbc.Button("Takeoff", id='takeoff-btn', color="success", className="me-2"),
-                                    dbc.Button("Land", id='land-btn', color="warning", className="me-2"),
-                                    dbc.Button("RTL", id='rtl-btn', color="danger"),
+        if HAS_DBC:
+            # Layout with bootstrap components
+            self.app.layout = dbc.Container([
+                dbc.Row([
+                    dbc.Col(html.H1("AI-Based UAV Autopilot Simulator", 
+                                   className="text-center mb-4"), width=12)
+                ]),
+                
+                # Flight controls and telemetry
+                dbc.Row([
+                    # Flight controls
+                    dbc.Col([
+                        dbc.Card([
+                            dbc.CardHeader("Flight Controls"),
+                            dbc.CardBody([
+                                dbc.Row([
+                                    dbc.Col([
+                                        html.H5("Flight Mode"),
+                                        dcc.Dropdown(
+                                            id='flight-mode-dropdown',
+                                            options=[{'label': mode.value.upper(), 'value': mode.value} 
+                                                    for mode in FlightMode],
+                                            value=FlightMode.STABILIZE.value
+                                        ),
+                                    ], width=6),
+                                    dbc.Col([
+                                        html.H5("Altitude Setpoint (m)"),
+                                        dcc.Slider(
+                                            id='altitude-slider',
+                                            min=1, max=100, step=1, value=10,
+                                            marks={i: str(i) for i in range(0, 101, 10)}
+                                        ),
+                                    ], width=6)
+                                ]),
+                                html.Hr(),
+                                dbc.Row([
+                                    dbc.Col([
+                                        html.H5("Manual Control"),
+                                        dbc.Button("Takeoff", id='takeoff-btn', color="success", className="me-2"),
+                                        dbc.Button("Land", id='land-btn', color="warning", className="me-2"),
+                                        dbc.Button("RTL", id='rtl-btn', color="danger"),
+                                    ])
                                 ])
                             ])
+                        ], className="mb-4"),
+                        
+                        # Telemetry display
+                        dbc.Card([
+                            dbc.CardHeader("Real-time Telemetry"),
+                            dbc.CardBody([
+                                html.Div(id='telemetry-display')
+                            ])
                         ])
-                    ], className="mb-4"),
+                    ], width=4),
                     
-                    # Telemetry display
-                    dbc.Card([
-                        dbc.CardHeader("Real-time Telemetry"),
-                        dbc.CardBody([
-                            html.Div(id='telemetry-display')
+                    # Plots and visualizations
+                    dbc.Col([
+                        dbc.Row([
+                            dbc.Col([
+                                dcc.Graph(id='position-plot')
+                            ], width=6),
+                            dbc.Col([
+                                dcc.Graph(id='attitude-plot')
+                            ], width=6)
+                        ]),
+                        dbc.Row([
+                            dbc.Col([
+                                dcc.Graph(id='control-plot')
+                            ], width=12)
+                        ]),
+                        dbc.Row([
+                            dbc.Col([
+                                dcc.Graph(id='3d-trajectory')
+                            ], width=12)
                         ])
-                    ])
-                ], width=4),
+                    ], width=8)
+                ]),
                 
-                # Plots and visualizations
-                dbc.Col([
-                    dbc.Row([
-                        dbc.Col([
-                            dcc.Graph(id='position-plot')
-                        ], width=6),
-                        dbc.Col([
-                            dcc.Graph(id='attitude-plot')
-                        ], width=6)
-                    ]),
-                    dbc.Row([
-                        dbc.Col([
-                            dcc.Graph(id='control-plot')
-                        ], width=12)
-                    ]),
-                    dbc.Row([
-                        dbc.Col([
-                            dcc.Graph(id='3d-trajectory')
-                        ], width=12)
-                    ])
-                ], width=8)
-            ]),
-            
-            # Mission planning
-            dbc.Row([
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardHeader("Mission Planning"),
-                        dbc.CardBody([
-                            dcc.Textarea(
-                                id='waypoint-input',
-                                placeholder='Enter waypoints as [[x1,y1,z1],[x2,y2,z2],...]',
-                                style={'width': '100%', 'height': 100}
-                            ),
-                            dbc.Button("Upload Mission", id='upload-mission-btn', className="mt-2"),
-                            html.Div(id='mission-status')
+                # Mission planning
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Card([
+                            dbc.CardHeader("Mission Planning"),
+                            dbc.CardBody([
+                                dcc.Textarea(
+                                    id='waypoint-input',
+                                    placeholder='Enter waypoints as [[x1,y1,z1],[x2,y2,z2],...]',
+                                    style={'width': '100%', 'height': 100}
+                                ),
+                                dbc.Button("Upload Mission", id='upload-mission-btn', className="mt-2"),
+                                html.Div(id='mission-status')
+                            ])
                         ])
-                    ])
-                ], width=12)
-            ]),
-            
-            # Update interval
-            dcc.Interval(
-                id='update-interval',
-                interval=100,  # Update every 100ms
-                n_intervals=0
-            )
-        ], fluid=True)
+                    ], width=12)
+                ]),
+                
+                # Update interval
+                dcc.Interval(
+                    id='update-interval',
+                    interval=100,  # Update every 100ms
+                    n_intervals=0
+                )
+            ], fluid=True)
+        else:
+            # Basic layout without bootstrap
+            self.app.layout = html.Div([
+                html.H1("AI-Based UAV Autopilot Simulator", style={'textAlign': 'center'}),
+                
+                html.Div([
+                    # Left column - controls
+                    html.Div([
+                        html.H3("Flight Controls"),
+                        html.Div([
+                            html.Label("Flight Mode"),
+                            dcc.Dropdown(
+                                id='flight-mode-dropdown',
+                                options=[{'label': mode.value.upper(), 'value': mode.value} 
+                                        for mode in FlightMode],
+                                value=FlightMode.STABILIZE.value
+                            ),
+                        ]),
+                        html.Br(),
+                        html.Div([
+                            html.Label("Altitude Setpoint (m)"),
+                            dcc.Slider(
+                                id='altitude-slider',
+                                min=1, max=100, step=1, value=10,
+                                marks={i: str(i) for i in range(0, 101, 10)}
+                            ),
+                        ]),
+                        html.Br(),
+                        html.Div([
+                            html.Button("Takeoff", id='takeoff-btn'),
+                            html.Button("Land", id='land-btn'),
+                            html.Button("RTL", id='rtl-btn'),
+                        ]),
+                        html.Br(),
+                        html.Div(id='telemetry-display')
+                    ], style={'width': '30%', 'float': 'left', 'padding': '10px'}),
+                    
+                    # Right column - plots
+                    html.Div([
+                        dcc.Graph(id='position-plot'),
+                        dcc.Graph(id='attitude-plot'),
+                        dcc.Graph(id='control-plot'),
+                        dcc.Graph(id='3d-trajectory')
+                    ], style={'width': '65%', 'float': 'right', 'padding': '10px'})
+                ]),
+                
+                # Mission planning
+                html.Div([
+                    html.H3("Mission Planning"),
+                    dcc.Textarea(
+                        id='waypoint-input',
+                        placeholder='Enter waypoints as [[x1,y1,z1],[x2,y2,z2],...]',
+                        style={'width': '100%', 'height': 100}
+                    ),
+                    html.Button("Upload Mission", id='upload-mission-btn'),
+                    html.Div(id='mission-status')
+                ], style={'clear': 'both', 'padding': '10px'}),
+                
+                dcc.Interval(
+                    id='update-interval',
+                    interval=100,
+                    n_intervals=0
+                )
+            ])
     
     def setup_callbacks(self):
         """Setup dashboard callbacks"""
@@ -1306,19 +1422,31 @@ class UAVDashboard:
                 'yaw': np.degrees(telemetry['attitude'][2])
             })
             
-            # Telemetry display
-            telemetry_display = dbc.Table([
-                html.Tr([html.Th("Parameter"), html.Th("Value")]),
-                html.Tr([html.Td("Position (NED)"), html.Td(f"{telemetry['position']}")]),
-                html.Tr([html.Td("Velocity"), html.Td(f"{telemetry['velocity']}")]),
-                html.Tr([html.Td("Attitude (deg)"), 
-                         html.Td(f"Roll: {np.degrees(telemetry['attitude'][0]):.1f}, "
-                                f"Pitch: {np.degrees(telemetry['attitude'][1]):.1f}, "
-                                f"Yaw: {np.degrees(telemetry['attitude'][2]):.1f}")]),
-                html.Tr([html.Td("Flight Mode"), html.Td(telemetry['flight_mode'].upper())]),
-                html.Tr([html.Td("Battery"), html.Td(f"{telemetry['battery']}%")]),
-                html.Tr([html.Td("GPS Fix"), html.Td("3D" if telemetry['gps_fix'] else "None")]),
-            ], bordered=True, size="sm")
+            # Create telemetry display
+            if HAS_DBC:
+                telemetry_display = dbc.Table([
+                    html.Tr([html.Th("Parameter"), html.Th("Value")]),
+                    html.Tr([html.Td("Position (NED)"), html.Td(f"{telemetry['position']}")]),
+                    html.Tr([html.Td("Velocity"), html.Td(f"{telemetry['velocity']}")]),
+                    html.Tr([html.Td("Attitude (deg)"), 
+                             html.Td(f"Roll: {np.degrees(telemetry['attitude'][0]):.1f}, "
+                                    f"Pitch: {np.degrees(telemetry['attitude'][1]):.1f}, "
+                                    f"Yaw: {np.degrees(telemetry['attitude'][2]):.1f}")]),
+                    html.Tr([html.Td("Flight Mode"), html.Td(telemetry['flight_mode'].upper())]),
+                    html.Tr([html.Td("Battery"), html.Td(f"{telemetry['battery']}%")]),
+                    html.Tr([html.Td("GPS Fix"), html.Td("3D" if telemetry['gps_fix'] else "None")]),
+                ], bordered=True, size="sm")
+            else:
+                telemetry_display = html.Div([
+                    html.P(f"Position: {telemetry['position']}"),
+                    html.P(f"Velocity: {telemetry['velocity']}"),
+                    html.P(f"Attitude: Roll: {np.degrees(telemetry['attitude'][0]):.1f}°, "
+                          f"Pitch: {np.degrees(telemetry['attitude'][1]):.1f}°, "
+                          f"Yaw: {np.degrees(telemetry['attitude'][2]):.1f}°"),
+                    html.P(f"Flight Mode: {telemetry['flight_mode'].upper()}"),
+                    html.P(f"Battery: {telemetry['battery']}%"),
+                    html.P(f"GPS: {'3D Fix' if telemetry['gps_fix'] else 'No Fix'}")
+                ])
             
             # Create plots
             position_fig = self._create_position_plot()
@@ -1339,9 +1467,15 @@ class UAVDashboard:
                     waypoints = json.loads(waypoints_text)
                     waypoints_np = [np.array(wp) for wp in waypoints]
                     self.fc.set_waypoints(waypoints_np)
-                    return dbc.Alert("Mission uploaded successfully!", color="success")
+                    if HAS_DBC:
+                        return dbc.Alert("Mission uploaded successfully!", color="success")
+                    else:
+                        return html.Div("Mission uploaded successfully!", style={'color': 'green'})
                 except Exception as e:
-                    return dbc.Alert(f"Error: {str(e)}", color="danger")
+                    if HAS_DBC:
+                        return dbc.Alert(f"Error: {str(e)}", color="danger")
+                    else:
+                        return html.Div(f"Error: {str(e)}", style={'color': 'red'})
             return ""
         
         @self.app.callback(
@@ -1467,7 +1601,7 @@ class UAVDashboard:
     def run(self, debug: bool = False, port: int = 8050):
         """Start the dashboard server"""
         logger.info(f"Starting UAV Dashboard on http://localhost:{port}")
-        self.app.run_server(debug=debug, port=port)
+        self.app.run_server(debug=debug, port=port, use_reloader=False)
 
 
 # ============================================================================
@@ -1508,7 +1642,7 @@ class SimulationManager:
         """Stop the simulation"""
         self.running = False
         if self.simulation_thread:
-            self.simulation_thread.join()
+            self.simulation_thread.join(timeout=2.0)
         logger.info("Simulation stopped")
         
     def _simulation_loop(self):
@@ -1540,7 +1674,7 @@ class SimulationManager:
             
         times = list(self.update_times)
         return {
-            'update_rate': 1.0 / np.mean(times),
+            'update_rate': 1.0 / np.mean(times) if np.mean(times) > 0 else 0,
             'update_time_mean': np.mean(times),
             'update_time_std': np.std(times),
             'real_time_factor': self.real_time_factor
@@ -1559,9 +1693,11 @@ class SimulationManager:
         
         try:
             # Start dashboard
-            self.dashboard.run(debug=False, port=dashboard_port)
+            self.dashboard.run(port=dashboard_port)
         except KeyboardInterrupt:
             logger.info("Shutting down...")
+        except Exception as e:
+            logger.error(f"Dashboard error: {e}")
         finally:
             self.stop_simulation()
 
@@ -1677,7 +1813,7 @@ def main():
     
     # Run with dashboard
     try:
-        sim_manager.run_with_dashboard(port=8050)
+        sim_manager.run_with_dashboard(dashboard_port=8050)
     except Exception as e:
         logger.error(f"Simulation error: {e}")
         sim_manager.stop_simulation()
@@ -1727,7 +1863,6 @@ def train_rl_agent():
     print("Training completed and model saved!")
 
 if __name__ == "__main__":
-    import os
     import argparse
     
     parser = argparse.ArgumentParser(description="AI-Based UAV Autopilot Simulator")
@@ -1742,4 +1877,4 @@ if __name__ == "__main__":
     elif args.mode == "train":
         train_rl_agent()
     elif args.mode == "demo":
-        demo_control_modes()        
+        demo_control_modes()
