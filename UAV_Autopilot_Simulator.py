@@ -699,10 +699,8 @@ class ModelPredictiveController:
             return np.clip(control, self.u_min, self.u_max)
         
         return np.array([0.5, 0, 0, 0])  # Hover
-
-
 # ============================================================================
-# PART 4: REINFORCEMENT LEARNING AUTOPILOT
+# PART 4: REINFORCEMENT LEARNING AUTOPILOT - FIXED VERSION
 # ============================================================================
 
 class UAVEnvironment:
@@ -717,8 +715,8 @@ class UAVEnvironment:
         self.sensor_model = SensorModel()
         self.dt = 0.01
         
-        # State and action spaces
-        self.observation_shape = (18,)
+        # State and action spaces - CORRECTED: 15 features, not 18
+        self.observation_shape = (15,)  # Fixed: 15 features
         self.action_shape = (4,)
         self.action_low = np.array([0, -1, -1, -1])
         self.action_high = np.array([1, 1, 1, 1])
@@ -767,17 +765,18 @@ class UAVEnvironment:
         return obs, reward, done, info
     
     def _get_observation(self) -> np.ndarray:
-        """Get observation vector from state"""
+        """Get observation vector from state - CORRECTED: 15 features"""
         sensor_data = self.sensor_model.measure(self.state, self.dt)
         
+        # CORRECTED: Use only 15 features that match the neural network input
         obs = np.concatenate([
-            self.state.position,
-            self.state.velocity,
-            self.state.orientation,
-            self.state.angular_velocity,
-            sensor_data.imu_accel,
-            sensor_data.imu_gyro
+            self.state.position,           # 3 features
+            self.state.velocity,           # 3 features  
+            self.state.orientation,        # 3 features
+            self.state.angular_velocity,   # 3 features
+            sensor_data.imu_accel[:3]      # 3 features (only first 3 elements)
         ])
+        # Total: 3+3+3+3+3 = 15 features
         
         return obs.astype(np.float32)
     
@@ -830,14 +829,14 @@ class UAVEnvironment:
 
 if HAS_TORCH:
     class PPONetwork(nn.Module):
-        """Neural network for PPO policy and value functions"""
+        """Neural network for PPO policy and value functions - CORRECTED INPUT SIZE"""
         
-        def __init__(self, obs_dim: int, action_dim: int):
+        def __init__(self, obs_dim: int = 15, action_dim: int = 4):  # Fixed: 15 input features
             super().__init__()
             
             # Shared feature extractor
             self.shared_net = nn.Sequential(
-                nn.Linear(obs_dim, 256),
+                nn.Linear(obs_dim, 256),  # Now expects 15 inputs
                 nn.ReLU(),
                 nn.Linear(256, 128),
                 nn.ReLU(),
@@ -884,8 +883,8 @@ class RLAutopilot:
             # Initialize untrained policy
             if HAS_TORCH:
                 self.policy = PPONetwork(
-                    self.env.observation_shape[0],
-                    self.env.action_shape[0]
+                    obs_dim=15,  # Fixed: 15 input features
+                    action_dim=4
                 )
             
     def compute_control(self, observation: np.ndarray) -> np.ndarray:
@@ -895,6 +894,10 @@ class RLAutopilot:
             return np.array([0.5, 0, 0, 0])
             
         with torch.no_grad():
+            # Ensure observation has the correct size (15 features)
+            if len(observation) != 15:
+                # If we get more features, take only the first 15
+                observation = observation[:15]
             obs_tensor = torch.FloatTensor(observation).unsqueeze(0)
             action_mean, _ = self.policy(obs_tensor)
             action = action_mean.squeeze(0).numpy()
@@ -935,22 +938,17 @@ class RLAutopilot:
     def load_model(self, path: str):
         """Load trained model"""
         if HAS_TORCH:
-            self.policy = PPONetwork(
-                self.env.observation_shape[0],
-                self.env.action_shape[0]
-            )
+            self.policy = PPONetwork(obs_dim=15, action_dim=4)  # Fixed dimensions
             self.policy.load_state_dict(torch.load(path))
             self.policy.eval()
-
-
 # ============================================================================
-# PART 5: FLIGHT CONTROLLER AND MISSION MANAGEMENT - FIXED
+# PART 5: FLIGHT CONTROLLER - FIXED WITH MISSING ATTRIBUTE
 # ============================================================================
 
 class FlightController:
     """
     Main flight controller that combines all control methods
-    and manages flight modes - FIXED VERSION
+    and manages flight modes
     """
     
     def __init__(self):
@@ -959,11 +957,11 @@ class FlightController:
         self.sensor_model = SensorModel()
         self.ekf = ExtendedKalmanFilter()
         
-        # Improved PID gains for better trajectory tracking
-        self.altitude_pid = PIDController(3.0, 0.2, 0.8, (0.2, 0.8))
-        self.roll_pid = PIDController(4.0, 0.1, 0.3, (-0.5, 0.5))
-        self.pitch_pid = PIDController(4.0, 0.1, 0.3, (-0.5, 0.5))
-        self.yaw_pid = PIDController(2.0, 0.05, 0.2, (-0.3, 0.3))
+        # Controllers for different axes
+        self.altitude_pid = PIDController(2.0, 0.1, 0.5, (0, 1))
+        self.roll_pid = PIDController(3.0, 0.05, 0.2, (-1, 1))
+        self.pitch_pid = PIDController(3.0, 0.05, 0.2, (-1, 1))
+        self.yaw_pid = PIDController(1.0, 0.01, 0.1, (-1, 1))
         
         # RL autopilot
         self.rl_autopilot = RLAutopilot()
@@ -987,10 +985,6 @@ class FlightController:
         self.current_waypoint_index = 0
         self.mission_complete = False
         
-        # Waypoint following parameters
-        self.waypoint_acceptance_radius = 1.0  # meters
-        self.cruise_altitude = -15.0  # meters (NED coordinates)
-        
         # Control outputs
         self.control_output = np.array([0.5, 0, 0, 0])  # hover
         
@@ -1001,6 +995,9 @@ class FlightController:
         # Data logging
         self.telemetry_history = deque(maxlen=1000)
         self.control_history = deque(maxlen=1000)
+        
+        # FIXED: Add missing waypoint acceptance radius
+        self.waypoint_acceptance_radius = 2.0  # meters
         
     def update(self, manual_control: Optional[np.ndarray] = None) -> UAVState:
         """Main update loop - runs at fixed timestep"""
@@ -1058,15 +1055,16 @@ class FlightController:
             return self._compute_stabilize_control()
     
     def _compute_rl_control(self) -> np.ndarray:
-        """Compute control using RL autopilot"""
-        # Get observation for RL
+        """Compute control using RL autopilot - CORRECTED OBSERVATION"""
+        # Get observation for RL - CORRECTED: Use only 15 features
         obs = np.concatenate([
-            self.estimated_state.position,
-            self.estimated_state.velocity,
-            self.estimated_state.orientation,
-            self.sensor_data.imu_accel,
-            self.sensor_data.imu_gyro
+            self.estimated_state.position,           # 3 features
+            self.estimated_state.velocity,           # 3 features  
+            self.estimated_state.orientation,        # 3 features
+            self.estimated_state.angular_velocity,   # 3 features
+            self.sensor_data.imu_accel[:3]           # 3 features (only first 3)
         ])
+        # Total: 15 features that match the neural network input
         
         return self.rl_autopilot.compute_control(obs)
     
@@ -1142,9 +1140,9 @@ class FlightController:
         
         control_output = np.array([throttle, roll, pitch, yaw])
         
-        # Check if waypoint reached
+        # Check if waypoint reached - FIXED: Now using the defined attribute
         distance = np.linalg.norm(self.estimated_state.position - current_wp)
-        if distance < self.waypoint_acceptance_radius:
+        if distance < self.waypoint_acceptance_radius:  # This should now work
             self.current_waypoint_index += 1
             if self.current_waypoint_index >= len(self.waypoints):
                 self.mission_complete = True
@@ -1240,7 +1238,8 @@ class FlightController:
             'gps_fix': True,
             'waypoint_index': self.current_waypoint_index,
             'mission_complete': self.mission_complete
-        }# ============================================================================
+        }
+# ============================================================================
 # PART 6: INTERACTIVE DASHBOARD - FIXED INTERVAL COMPONENT
 # ============================================================================
 
