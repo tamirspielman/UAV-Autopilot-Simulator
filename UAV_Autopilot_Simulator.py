@@ -1240,24 +1240,24 @@ class FlightController:
             'mission_complete': self.mission_complete
         }
 # ============================================================================
-# PART 6: INTERACTIVE DASHBOARD - FIXED VISUALIZATIONS
+# PART 6: MINIMALISTIC DASHBOARD - MODERN UI/UX
 # ============================================================================
 
 if HAS_DASH:
     class UAVDashboard:
         """
-        Interactive dashboard for real-time monitoring and control
-        Fixed visualization components
+        Modern minimalistic dashboard for real-time monitoring and control
+        Clean, professional design with better UX
         """
         
         def __init__(self, flight_controller: FlightController):
             self.fc = flight_controller
-            self.app = dash.Dash(__name__)
+            self.app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG])
                 
             self.setup_layout()
             self.setup_callbacks()
             
-            # Data buffers for plotting - FIXED: Initialize with proper structure
+            # Data buffers for plotting
             self.position_history = deque(maxlen=200)
             self.attitude_history = deque(maxlen=200)
             self.control_history = deque(maxlen=200)
@@ -1285,189 +1285,355 @@ if HAS_DASH:
                 })
         
         def setup_layout(self):
-            """Setup the dashboard layout using basic Dash components"""
+            """Setup the modern minimalistic layout"""
             
-            # Custom CSS for styling
+            # Custom CSS for clean, modern styling
             styles = {
-                'container': {'backgroundColor': '#1a1a1a', 'minHeight': '100vh', 'padding': '20px'},
-                'header': {'color': '#00ff00', 'fontWeight': 'bold', 'textAlign': 'center'},
-                'card': {'backgroundColor': '#2c3e50', 'border': '1px solid #00ff00', 'borderRadius': '5px', 'padding': '15px', 'marginBottom': '15px'},
-                'cardHeader': {'color': 'white', 'fontWeight': 'bold', 'borderBottom': '1px solid #00ff00', 'paddingBottom': '10px', 'marginBottom': '10px'},
-                'button': {'backgroundColor': '#3498db', 'color': 'white', 'border': 'none', 'padding': '10px', 'margin': '5px', 'borderRadius': '3px', 'width': '100%'},
-                'buttonSuccess': {'backgroundColor': '#27ae60', 'color': 'white', 'border': 'none', 'padding': '10px', 'margin': '5px', 'borderRadius': '3px', 'width': '100%'},
-                'buttonWarning': {'backgroundColor': '#f39c12', 'color': 'white', 'border': 'none', 'padding': '10px', 'margin': '5px', 'borderRadius': '3px', 'width': '100%'},
-                'buttonDanger': {'backgroundColor': '#e74c3c', 'color': 'white', 'border': 'none', 'padding': '10px', 'margin': '5px', 'borderRadius': '3px', 'width': '100%'},
-                'dropdown': {'backgroundColor': '#34495e', 'color': 'white', 'border': '1px solid #00ff00'},
-                'table': {'color': 'white', 'width': '100%', 'borderCollapse': 'collapse'},
-                'tableHeader': {'backgroundColor': '#2c3e50', 'color': '#00ff00', 'padding': '8px', 'border': '1px solid #00ff00'},
-                'tableCell': {'padding': '8px', 'border': '1px solid #00ff00'}
+                'container': {
+                    'backgroundColor': '#0a0a0a',
+                    'minHeight': '100vh',
+                    'padding': '20px',
+                    'fontFamily': 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                },
+                'header': {
+                    'color': '#ffffff',
+                    'fontWeight': '300',
+                    'textAlign': 'center',
+                    'marginBottom': '10px',
+                    'fontSize': '2.5rem',
+                    'background': 'linear-gradient(45deg, #667eea, #764ba2)',
+                    'WebkitBackgroundClip': 'text',
+                    'WebkitTextFillColor': 'transparent'
+                },
+                'subheader': {
+                    'color': '#8892b0',
+                    'textAlign': 'center',
+                    'marginBottom': '30px',
+                    'fontSize': '1rem',
+                    'fontWeight': '300'
+                },
+                'card': {
+                    'backgroundColor': '#1a1a1a',
+                    'border': '1px solid #2a2a2a',
+                    'borderRadius': '12px',
+                    'padding': '20px',
+                    'marginBottom': '20px',
+                    'boxShadow': '0 4px 6px rgba(0, 0, 0, 0.1)',
+                    'transition': 'all 0.3s ease'
+                },
+                'cardHover': {
+                    'transform': 'translateY(-2px)',
+                    'boxShadow': '0 8px 15px rgba(0, 0, 0, 0.2)'
+                },
+                'cardHeader': {
+                    'color': '#ffffff',
+                    'fontWeight': '600',
+                    'fontSize': '1.1rem',
+                    'marginBottom': '15px',
+                    'borderBottom': '1px solid #2a2a2a',
+                    'paddingBottom': '10px'
+                },
+                'button': {
+                    'backgroundColor': '#3a3a3a',
+                    'color': '#ffffff',
+                    'border': 'none',
+                    'padding': '12px 20px',
+                    'borderRadius': '8px',
+                    'fontWeight': '500',
+                    'transition': 'all 0.3s ease',
+                    'width': '100%',
+                    'marginBottom': '8px'
+                },
+                'buttonHover': {
+                    'backgroundColor': '#4a4a4a',
+                    'transform': 'translateY(-1px)'
+                },
+                'buttonPrimary': {
+                    'backgroundColor': '#667eea',
+                    'color': '#ffffff'
+                },
+                'buttonSuccess': {
+                    'backgroundColor': '#10b981',
+                    'color': '#ffffff'
+                },
+                'buttonWarning': {
+                    'backgroundColor': '#f59e0b',
+                    'color': '#ffffff'
+                },
+                'buttonDanger': {
+                    'backgroundColor': '#ef4444',
+                    'color': '#ffffff'
+                },
+                'dropdown': {
+                    'backgroundColor': '#2a2a2a',
+                    'color': '#ffffff',
+                    'border': '1px solid #3a3a3a',
+                    'borderRadius': '8px'
+                },
+                'slider': {
+                    'marginBottom': '20px'
+                },
+                'statusIndicator': {
+                    'display': 'inline-block',
+                    'width': '8px',
+                    'height': '8px',
+                    'borderRadius': '50%',
+                    'marginRight': '8px'
+                },
+                'statusOnline': {
+                    'backgroundColor': '#10b981'
+                },
+                'statusOffline': {
+                    'backgroundColor': '#ef4444'
+                },
+                'metricValue': {
+                    'color': '#ffffff',
+                    'fontSize': '1.5rem',
+                    'fontWeight': '600',
+                    'marginBottom': '5px'
+                },
+                'metricLabel': {
+                    'color': '#8892b0',
+                    'fontSize': '0.8rem',
+                    'textTransform': 'uppercase',
+                    'letterSpacing': '0.5px'
+                }
             }
             
-            self.app.layout = html.Div([
+            self.app.layout = dbc.Container([
                 # Header
-                html.Div([
-                    html.H1("AI-Based UAV Autopilot Simulator", style=styles['header']),
-                    html.H4("Real-time Flight Control System", style={'color': '#cccccc', 'textAlign': 'center'})
-                ]),
+                dbc.Row([
+                    dbc.Col([
+                        html.H1("UAV Autopilot", style=styles['header']),
+                        html.P("Advanced Flight Control System", style=styles['subheader'])
+                    ], width=12)
+                ], className='mb-4'),
                 
-                html.Hr(style={'borderColor': '#00ff00', 'margin': '20px 0'}),
-                
-                html.Div([
-                    # Left sidebar - Controls
-                    html.Div([
+                # Main Content
+                dbc.Row([
+                    # Left Column - Controls and Status
+                    dbc.Col([
                         # Flight Controls Card
-                        html.Div([
-                            html.H4("🚀 Flight Controls", style=styles['cardHeader']),
-                            
-                            # Flight Mode Selection
-                            html.Div([
-                                html.Label("Flight Mode", style={'color': 'white', 'marginBottom': '5px'}),
-                                dcc.Dropdown(
-                                    id='flight-mode-dropdown',
-                                    options=[
-                                        {'label': '🛸 MANUAL', 'value': 'manual'},
-                                        {'label': '⚡ STABILIZE', 'value': 'stabilize'},
-                                        {'label': '📊 ALTITUDE HOLD', 'value': 'altitude_hold'},
-                                        {'label': '🎯 POSITION HOLD', 'value': 'position_hold'},
-                                        {'label': '🔄 AUTO MISSION', 'value': 'auto'},
-                                        {'label': '🏠 RETURN TO LAUNCH', 'value': 'return_to_launch'},
-                                        {'label': '🛬 LAND', 'value': 'land'},
-                                        {'label': '🤖 AI PILOT', 'value': 'ai_pilot'}
-                                    ],
-                                    value='stabilize',
-                                    style=styles['dropdown']
-                                )
-                            ], style={'marginBottom': '15px'}),
-                            
-                            # Altitude Control
-                            html.Div([
-                                html.Label("Altitude Setpoint (m)", style={'color': 'white', 'marginBottom': '5px'}),
-                                dcc.Slider(
-                                    id='altitude-slider',
-                                    min=1, 
-                                    max=100, 
-                                    step=1, 
-                                    value=10,
-                                    marks={i: str(i) for i in range(0, 101, 20)},
-                                    tooltip={"placement": "bottom", "always_visible": True}
-                                )
-                            ], style={'marginBottom': '20px'}),
-                            
-                            # Quick Action Buttons
-                            html.Div([
-                                html.Label("Quick Actions", style={'color': 'white', 'marginBottom': '10px'}),
+                        dbc.Card([
+                            dbc.CardHeader("Flight Controls", style=styles['cardHeader']),
+                            dbc.CardBody([
+                                # Flight Mode Selection
                                 html.Div([
-                                    html.Button("🚀 Takeoff", id='takeoff-btn', style=styles['buttonSuccess']),
-                                    html.Button("🛬 Land", id='land-btn', style=styles['buttonWarning'])
-                                ], style={'display': 'flex', 'gap': '10px'}),
+                                    html.Label("Flight Mode", style={'color': '#8892b0', 'marginBottom': '8px', 'fontWeight': '500'}),
+                                    dcc.Dropdown(
+                                        id='flight-mode-dropdown',
+                                        options=[
+                                            {'label': 'Manual', 'value': 'manual'},
+                                            {'label': 'Stabilize', 'value': 'stabilize'},
+                                            {'label': 'Altitude Hold', 'value': 'altitude_hold'},
+                                            {'label': 'Position Hold', 'value': 'position_hold'},
+                                            {'label': 'Auto Mission', 'value': 'auto'},
+                                            {'label': 'Return to Launch', 'value': 'return_to_launch'},
+                                            {'label': 'Land', 'value': 'land'},
+                                            {'label': 'AI Pilot', 'value': 'ai_pilot'}
+                                        ],
+                                        value='stabilize',
+                                        style=styles['dropdown'],
+                                        clearable=False
+                                    )
+                                ], className='mb-3'),
+                                
+                                # Altitude Control
                                 html.Div([
-                                    html.Button("🏠 RTL", id='rtl-btn', style=styles['buttonDanger']),
-                                    html.Button("⏸️ Pause", id='pause-btn', style=styles['button'])
-                                ], style={'display': 'flex', 'gap': '10px'})
-                            ])
-                        ], style=styles['card']),
-                        
-                        # System Status Card
-                        html.Div([
-                            html.H4("📊 System Status", style=styles['cardHeader']),
-                            html.Div([
+                                    html.Label("Target Altitude", style={'color': '#8892b0', 'marginBottom': '8px', 'fontWeight': '500'}),
+                                    dcc.Slider(
+                                        id='altitude-slider',
+                                        min=1, 
+                                        max=100, 
+                                        step=1, 
+                                        value=10,
+                                        marks={i: str(i) for i in range(0, 101, 25)},
+                                        tooltip={"placement": "bottom", "always_visible": True}
+                                    )
+                                ], className='mb-4'),
+                                
+                                # Quick Actions
                                 html.Div([
-                                    html.Div("UAV Status", style={'color': '#cccccc', 'fontSize': '12px'}),
-                                    html.Div("🟢 ONLINE", id="uav-status", style={'color': '#00ff00', 'fontWeight': 'bold', 'fontSize': '16px'})
-                                ], style={'marginBottom': '10px'}),
-                                html.Div([
-                                    html.Div("GPS Fix", style={'color': '#cccccc', 'fontSize': '12px'}),
-                                    html.Div("🟢 3D FIX", id="gps-status", style={'color': '#00ff00', 'fontWeight': 'bold', 'fontSize': '16px'})
-                                ], style={'marginBottom': '10px'}),
-                                html.Div([
-                                    html.Div("Battery", style={'color': '#cccccc', 'fontSize': '12px'}),
-                                    html.Div("🔋 85%", id="battery-status", style={'color': '#ffa500', 'fontWeight': 'bold', 'fontSize': '16px'})
-                                ], style={'marginBottom': '10px'}),
-                                html.Div([
-                                    html.Div("Sensors", style={'color': '#cccccc', 'fontSize': '12px'}),
-                                    html.Div("🟢 OK", id="sensor-status", style={'color': '#00ff00', 'fontWeight': 'bold', 'fontSize': '16px'})
+                                    html.Label("Quick Actions", style={'color': '#8892b0', 'marginBottom': '12px', 'fontWeight': '500'}),
+                                    dbc.Row([
+                                        dbc.Col([
+                                            dbc.Button("Takeoff", id='takeoff-btn', color="success", className='w-100 mb-2')
+                                        ], width=6),
+                                        dbc.Col([
+                                            dbc.Button("Land", id='land-btn', color="warning", className='w-100 mb-2')
+                                        ], width=6)
+                                    ]),
+                                    dbc.Row([
+                                        dbc.Col([
+                                            dbc.Button("RTL", id='rtl-btn', color="danger", className='w-100 mb-2')
+                                        ], width=6),
+                                        dbc.Col([
+                                            dbc.Button("Pause", id='pause-btn', color="secondary", className='w-100 mb-2')
+                                        ], width=6)
+                                    ])
                                 ])
                             ])
-                        ], style=styles['card']),
+                        ], style=styles['card'], className='mb-3'),
+                        
+                        # System Status Card
+                        dbc.Card([
+                            dbc.CardHeader("System Status", style=styles['cardHeader']),
+                            dbc.CardBody([
+                                dbc.Row([
+                                    dbc.Col([
+                                        html.Div([
+                                            html.Div("UAV Status", style=styles['metricLabel']),
+                                            html.Div("🟢 ONLINE", id="uav-status", style=styles['metricValue'])
+                                        ])
+                                    ], width=6),
+                                    dbc.Col([
+                                        html.Div([
+                                            html.Div("GPS Fix", style=styles['metricLabel']),
+                                            html.Div("🟢 3D FIX", id="gps-status", style=styles['metricValue'])
+                                        ])
+                                    ], width=6)
+                                ], className='mb-3'),
+                                dbc.Row([
+                                    dbc.Col([
+                                        html.Div([
+                                            html.Div("Battery", style=styles['metricLabel']),
+                                            html.Div("🔋 85%", id="battery-status", style=styles['metricValue'])
+                                        ])
+                                    ], width=6),
+                                    dbc.Col([
+                                        html.Div([
+                                            html.Div("Sensors", style=styles['metricLabel']),
+                                            html.Div("🟢 OK", id="sensor-status", style=styles['metricValue'])
+                                        ])
+                                    ], width=6)
+                                ])
+                            ])
+                        ], style=styles['card'], className='mb-3'),
                         
                         # Mission Planning Card
-                        html.Div([
-                            html.H4("🎯 Mission Planning", style=styles['cardHeader']),
-                            html.Div([
-                                html.Label("Waypoints (JSON format)", style={'color': 'white', 'marginBottom': '5px'}),
-                                dcc.Textarea(
-                                    id='waypoint-input',
-                                    value='[[0, 0, -10], [15, 0, -15], [15, 15, -20], [0, 15, -15], [0, 0, -10]]',
-                                    style={'width': '100%', 'height': '100px', 'fontFamily': 'monospace', 'backgroundColor': '#34495e', 'color': 'white', 'border': '1px solid #00ff00'},
-                                    placeholder='Enter waypoints as: [[x1,y1,z1],[x2,y2,z2],...]'
-                                ),
-                            ], style={'marginBottom': '15px'}),
-                            html.Div([
-                                html.Button("📤 Upload Mission", id='upload-mission-btn', style=styles['button']),
-                                html.Button("🗑️ Clear", id='clear-mission-btn', style={**styles['button'], 'backgroundColor': '#95a5a6'})
-                            ], style={'display': 'flex', 'gap': '10px'}),
-                            html.Div(id='mission-status', style={'marginTop': '15px'})
-                        ], style=styles['card']),
-                        
-                        # Telemetry Display Card
-                        html.Div([
-                            html.H4("📡 Real-time Telemetry", style=styles['cardHeader']),
-                            html.Div(id='telemetry-display', children=[
-                                html.Div("Waiting for telemetry data...", style={'color': '#cccccc', 'textAlign': 'center'})
+                        dbc.Card([
+                            dbc.CardHeader("Mission Planning", style=styles['cardHeader']),
+                            dbc.CardBody([
+                                html.Div([
+                                    html.Label("Waypoints", style={'color': '#8892b0', 'marginBottom': '8px', 'fontWeight': '500'}),
+                                    dcc.Textarea(
+                                        id='waypoint-input',
+                                        value='[[0, 0, -10], [15, 0, -15], [15, 15, -20], [0, 15, -15], [0, 0, -10]]',
+                                        style={
+                                            'width': '100%', 
+                                            'height': '100px', 
+                                            'fontFamily': 'monospace', 
+                                            'backgroundColor': '#2a2a2a', 
+                                            'color': '#ffffff', 
+                                            'border': '1px solid #3a3a3a',
+                                            'borderRadius': '6px',
+                                            'padding': '10px',
+                                            'fontSize': '0.9rem'
+                                        },
+                                        placeholder='Enter waypoints as JSON: [[x1,y1,z1],[x2,y2,z2],...]'
+                                    ),
+                                ], className='mb-3'),
+                                dbc.Row([
+                                    dbc.Col([
+                                        dbc.Button("Upload Mission", id='upload-mission-btn', color="primary", className='w-100')
+                                    ], width=6),
+                                    dbc.Col([
+                                        dbc.Button("Clear", id='clear-mission-btn', color="secondary", className='w-100')
+                                    ], width=6)
+                                ]),
+                                html.Div(id='mission-status', className='mt-3')
                             ])
                         ], style=styles['card'])
-                    ], style={'width': '30%', 'float': 'left', 'paddingRight': '15px'}),
+                    ], width=3),
                     
-                    # Main content - Visualizations
-                    html.Div([
+                    # Right Column - Visualizations
+                    dbc.Col([
                         # Visualization Tabs
-                        html.Div([
-                            html.H4("📊 Visualizations", style=styles['cardHeader']),
-                            dcc.Tabs(id="visualization-tabs", value='tab-3d', children=[
-                                dcc.Tab(label='3D Trajectory', value='tab-3d'),
-                                dcc.Tab(label='Position', value='tab-position'),
-                                dcc.Tab(label='Attitude', value='tab-attitude'),
-                                dcc.Tab(label='Controls', value='tab-controls'),
-                            ], style={'marginBottom': '15px'}),
-                            html.Div(id="visualization-content", style={'height': '500px'})
-                        ], style=styles['card']),
-                        
-                        # Performance Metrics
-                        html.Div([
-                            html.H4("⚡ Performance Metrics", style=styles['cardHeader']),
-                            html.Div([
-                                html.Div([
-                                    html.Div("Update Rate", style={'color': '#cccccc', 'textAlign': 'center', 'fontSize': '12px'}),
-                                    html.Div("100 Hz", id="update-rate", style={'color': '#00ff00', 'textAlign': 'center', 'fontWeight': 'bold', 'fontSize': '20px'})
-                                ], style={'display': 'inline-block', 'width': '24%', 'textAlign': 'center'}),
-                                html.Div([
-                                    html.Div("CPU Usage", style={'color': '#cccccc', 'textAlign': 'center', 'fontSize': '12px'}),
-                                    html.Div("2.5%", id="cpu-usage", style={'color': '#00ff00', 'textAlign': 'center', 'fontWeight': 'bold', 'fontSize': '20px'})
-                                ], style={'display': 'inline-block', 'width': '24%', 'textAlign': 'center'}),
-                                html.Div([
-                                    html.Div("Memory", style={'color': '#cccccc', 'textAlign': 'center', 'fontSize': '12px'}),
-                                    html.Div("45 MB", id="memory-usage", style={'color': '#00ff00', 'textAlign': 'center', 'fontWeight': 'bold', 'fontSize': '20px'})
-                                ], style={'display': 'inline-block', 'width': '24%', 'textAlign': 'center'}),
-                                html.Div([
-                                    html.Div("Real-time", style={'color': '#cccccc', 'textAlign': 'center', 'fontSize': '12px'}),
-                                    html.Div("1.0x", id="rt-factor", style={'color': '#00ff00', 'textAlign': 'center', 'fontWeight': 'bold', 'fontSize': '20px'})
-                                ], style={'display': 'inline-block', 'width': '24%', 'textAlign': 'center'})
+                        dbc.Card([
+                            dbc.CardBody([
+                                dcc.Tabs(
+                                    id="visualization-tabs", 
+                                    value='tab-3d', 
+                                    children=[
+                                        dcc.Tab(
+                                            label='3D Trajectory', 
+                                            value='tab-3d',
+                                            style={'backgroundColor': '#2a2a2a', 'color': '#8892b0', 'border': '1px solid #3a3a3a'},
+                                            selected_style={'backgroundColor': '#3a3a3a', 'color': '#ffffff', 'border': '1px solid #667eea'}
+                                        ),
+                                        dcc.Tab(
+                                            label='Position', 
+                                            value='tab-position',
+                                            style={'backgroundColor': '#2a2a2a', 'color': '#8892b0', 'border': '1px solid #3a3a3a'},
+                                            selected_style={'backgroundColor': '#3a3a3a', 'color': '#ffffff', 'border': '1px solid #667eea'}
+                                        ),
+                                        dcc.Tab(
+                                            label='Attitude', 
+                                            value='tab-attitude',
+                                            style={'backgroundColor': '#2a2a2a', 'color': '#8892b0', 'border': '1px solid #3a3a3a'},
+                                            selected_style={'backgroundColor': '#3a3a3a', 'color': '#ffffff', 'border': '1px solid #667eea'}
+                                        ),
+                                        dcc.Tab(
+                                            label='Controls', 
+                                            value='tab-controls',
+                                            style={'backgroundColor': '#2a2a2a', 'color': '#8892b0', 'border': '1px solid #3a3a3a'},
+                                            selected_style={'backgroundColor': '#3a3a3a', 'color': '#ffffff', 'border': '1px solid #667eea'}
+                                        ),
+                                    ],
+                                    style={'marginBottom': '15px'}
+                                ),
+                                html.Div(id="visualization-content", style={'height': '500px'})
                             ])
-                        ], style=styles['card'])
-                    ], style={'width': '68%', 'float': 'right'})
-                ], style={'overflow': 'hidden'}),  # Clear float
+                        ], style=styles['card'], className='mb-3'),
+                        
+                        # Telemetry and Performance
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardHeader("Telemetry", style=styles['cardHeader']),
+                                    dbc.CardBody([
+                                        html.Div(id='telemetry-display', style={'color': '#ffffff', 'fontFamily': 'monospace', 'fontSize': '0.9rem'})
+                                    ])
+                                ], style=styles['card'])
+                            ], width=8),
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardHeader("Performance", style=styles['cardHeader']),
+                                    dbc.CardBody([
+                                        html.Div([
+                                            html.Div("Update Rate", style=styles['metricLabel']),
+                                            html.Div("100 Hz", id="update-rate", style=styles['metricValue'])
+                                        ], className='mb-3'),
+                                        html.Div([
+                                            html.Div("CPU Usage", style=styles['metricLabel']),
+                                            html.Div("2.5%", id="cpu-usage", style=styles['metricValue'])
+                                        ], className='mb-3'),
+                                        html.Div([
+                                            html.Div("Memory", style=styles['metricLabel']),
+                                            html.Div("45 MB", id="memory-usage", style=styles['metricValue'])
+                                        ], className='mb-3'),
+                                        html.Div([
+                                            html.Div("Real-time", style=styles['metricLabel']),
+                                            html.Div("1.0x", id="rt-factor", style=styles['metricValue'])
+                                        ])
+                                    ])
+                                ], style=styles['card'])
+                            ], width=4)
+                        ])
+                    ], width=9)
+                ]),
                 
-                # Update Interval - FIXED: Just include it in the layout, don't call it
+                # Update Interval
                 dcc.Interval(
                     id='update-interval',
                     interval=200,  # Update every 200ms (5Hz)
                     n_intervals=0
                 )
                 
-            ], style=styles['container'])
+            ], fluid=True, style=styles['container'])
         
         def setup_callbacks(self):
-            """Setup all dashboard callbacks - FIXED: Proper data updates"""
+            """Setup all dashboard callbacks"""
             
             # Visualization tab content
             @self.app.callback(
@@ -1480,29 +1646,34 @@ if HAS_DASH:
                     return dcc.Graph(
                         id='3d-plot',
                         figure=self._create_3d_trajectory(),
-                        config={'displayModeBar': True, 'scrollZoom': True}
+                        config={
+                            'displayModeBar': True, 
+                            'scrollZoom': True,
+                            'displaylogo': False,
+                            'modeBarButtonsToRemove': ['pan2d', 'lasso2d', 'select2d']
+                        }
                     )
                 elif active_tab == "tab-position":
                     return dcc.Graph(
                         id='position-plot',
                         figure=self._create_position_plot(),
-                        config={'displayModeBar': True}
+                        config={'displayModeBar': True, 'displaylogo': False}
                     )
                 elif active_tab == "tab-attitude":
                     return dcc.Graph(
                         id='attitude-plot', 
                         figure=self._create_attitude_plot(),
-                        config={'displayModeBar': True}
+                        config={'displayModeBar': True, 'displaylogo': False}
                     )
                 elif active_tab == "tab-controls":
                     return dcc.Graph(
                         id='control-plot',
                         figure=self._create_control_plot(),
-                        config={'displayModeBar': True}
+                        config={'displayModeBar': True, 'displaylogo': False}
                     )
                 return html.Div("Select a visualization tab")
             
-            # Update all dynamic content - FIXED: Proper data collection
+            # Update all dynamic content
             @self.app.callback(
                 [Output('telemetry-display', 'children'),
                  Output('update-rate', 'children'),
@@ -1536,43 +1707,34 @@ if HAS_DASH:
                         'yaw': telemetry['attitude'][2]
                     })
                     
-                    # Create telemetry display table
-                    telemetry_display = html.Table([
-                        html.Tr([
-                            html.Th("Parameter", style={'backgroundColor': '#2c3e50', 'color': '#00ff00', 'padding': '8px', 'border': '1px solid #00ff00'}),
-                            html.Th("Value", style={'backgroundColor': '#2c3e50', 'color': '#00ff00', 'padding': '8px', 'border': '1px solid #00ff00'})
-                        ]),
-                        html.Tr([
-                            html.Td("Position (N,E,D)", style={'padding': '8px', 'border': '1px solid #00ff00', 'color': 'white'}),
-                            html.Td(f"{telemetry['position'][0]:.1f}, {telemetry['position'][1]:.1f}, {telemetry['position'][2]:.1f}", 
-                                   style={'padding': '8px', 'border': '1px solid #00ff00', 'color': '#00ff00'})
-                        ]),
-                        html.Tr([
-                            html.Td("Velocity (m/s)", style={'padding': '8px', 'border': '1px solid #00ff00', 'color': 'white'}),
-                            html.Td(f"{telemetry['velocity'][0]:.1f}, {telemetry['velocity'][1]:.1f}, {telemetry['velocity'][2]:.1f}", 
-                                   style={'padding': '8px', 'border': '1px solid #00ff00', 'color': '#00ff00'})
-                        ]),
-                        html.Tr([
-                            html.Td("Attitude (R,P,Y)", style={'padding': '8px', 'border': '1px solid #00ff00', 'color': 'white'}),
-                            html.Td(f"{np.degrees(telemetry['attitude'][0]):.1f}°, {np.degrees(telemetry['attitude'][1]):.1f}°, {np.degrees(telemetry['attitude'][2]):.1f}°", 
-                                   style={'padding': '8px', 'border': '1px solid #00ff00', 'color': '#00ff00'})
-                        ]),
-                        html.Tr([
-                            html.Td("Flight Mode", style={'padding': '8px', 'border': '1px solid #00ff00', 'color': 'white'}),
-                            html.Td(telemetry['flight_mode'].upper(), 
-                                   style={'padding': '8px', 'border': '1px solid #00ff00', 'color': '#00ff00'})
-                        ]),
-                        html.Tr([
-                            html.Td("Waypoint Progress", style={'padding': '8px', 'border': '1px solid #00ff00', 'color': 'white'}),
-                            html.Td(f"{telemetry['waypoint_index'] + 1}/{len(self.fc.waypoints) if self.fc.waypoints else 0}", 
-                                   style={'padding': '8px', 'border': '1px solid #00ff00', 'color': '#00ff00'})
-                        ]),
-                        html.Tr([
-                            html.Td("Mission Status", style={'padding': '8px', 'border': '1px solid #00ff00', 'color': 'white'}),
-                            html.Td("COMPLETE" if telemetry['mission_complete'] else "ACTIVE", 
-                                   style={'padding': '8px', 'border': '1px solid #00ff00', 'color': '#00ff00'})
-                        ]),
-                    ], style={'width': '100%', 'borderCollapse': 'collapse'})
+                    # Create minimal telemetry display
+                    telemetry_display = html.Div([
+                        html.Div([
+                            html.Span("Position: ", style={'color': '#8892b0'}),
+                            html.Span(f"N{telemetry['position'][0]:.1f}, E{telemetry['position'][1]:.1f}, Alt{-telemetry['position'][2]:.1f}m", 
+                                     style={'color': '#ffffff'})
+                        ], className='mb-1'),
+                        html.Div([
+                            html.Span("Velocity: ", style={'color': '#8892b0'}),
+                            html.Span(f"{np.linalg.norm(telemetry['velocity']):.1f} m/s", 
+                                     style={'color': '#ffffff'})
+                        ], className='mb-1'),
+                        html.Div([
+                            html.Span("Attitude: ", style={'color': '#8892b0'}),
+                            html.Span(f"R{np.degrees(telemetry['attitude'][0]):.1f}°, P{np.degrees(telemetry['attitude'][1]):.1f}°, Y{np.degrees(telemetry['attitude'][2]):.1f}°", 
+                                     style={'color': '#ffffff'})
+                        ], className='mb-1'),
+                        html.Div([
+                            html.Span("Mode: ", style={'color': '#8892b0'}),
+                            html.Span(telemetry['flight_mode'].replace('_', ' ').title(), 
+                                     style={'color': '#667eea', 'fontWeight': '500'})
+                        ], className='mb-1'),
+                        html.Div([
+                            html.Span("Mission: ", style={'color': '#8892b0'}),
+                            html.Span(f"WP {telemetry['waypoint_index'] + 1}/{len(self.fc.waypoints) if self.fc.waypoints else 0}", 
+                                     style={'color': '#ffffff'})
+                        ])
+                    ])
                     
                     # Performance metrics (simulated)
                     update_rate = f"{(1/self.fc.dt):.0f} Hz"
@@ -1591,7 +1753,7 @@ if HAS_DASH:
                     
                 except Exception as e:
                     logger.error(f"Error updating dashboard: {e}")
-                    error_msg = html.Div(f"Error: {str(e)}", style={'color': 'red'})
+                    error_msg = html.Div(f"Error: {str(e)}", style={'color': '#ef4444'})
                     return (error_msg, "N/A", "N/A", "N/A", "N/A", "🔴 ERROR", "🔴 ERROR", "🔴 ERROR", "🔴 ERROR")
             
             # Mission control callbacks
@@ -1613,24 +1775,27 @@ if HAS_DASH:
                         waypoints = json.loads(waypoints_text)
                         waypoints_np = [np.array(wp) for wp in waypoints]
                         self.fc.set_waypoints(waypoints_np)
-                        return html.Div(
-                            f"✅ Mission uploaded with {len(waypoints)} waypoints!", 
-                            style={'color': '#27ae60', 'padding': '10px', 'border': '1px solid #27ae60', 'borderRadius': '3px'}
+                        return dbc.Alert(
+                            f"Mission uploaded with {len(waypoints)} waypoints!", 
+                            color="success",
+                            className='mb-0'
                         )
                     
                     elif button_id == 'clear-mission-btn':
                         self.fc.waypoints = []
                         self.fc.current_waypoint_index = 0
                         self.fc.mission_complete = False
-                        return html.Div(
-                            "🗑️ Mission cleared!", 
-                            style={'color': '#3498db', 'padding': '10px', 'border': '1px solid #3498db', 'borderRadius': '3px'}
+                        return dbc.Alert(
+                            "Mission cleared!", 
+                            color="info",
+                            className='mb-0'
                         )
                         
                 except Exception as e:
-                    return html.Div(
-                        f"❌ Error: {str(e)}", 
-                        style={'color': '#e74c3c', 'padding': '10px', 'border': '1px solid #e74c3c', 'borderRadius': '3px'}
+                    return dbc.Alert(
+                        f"Error: {str(e)}", 
+                        color="danger",
+                        className='mb-0'
                     )
                 
                 return ""
@@ -1687,8 +1852,9 @@ if HAS_DASH:
                     self.fc.setpoints['altitude'] = -altitude  # Convert to NED
                 return altitude
         
+        # Keep the visualization methods the same (they're already good)
         def _create_3d_trajectory(self):
-            """Create 3D trajectory plot - FIXED: Better visualization"""
+            """Create 3D trajectory plot"""
             try:
                 if not self.position_history:
                     return self._create_empty_plot("3D Trajectory", "Waiting for flight data...")
@@ -1773,7 +1939,8 @@ if HAS_DASH:
                     title=dict(
                         text="3D Flight Trajectory",
                         x=0.5,
-                        xanchor='center'
+                        xanchor='center',
+                        font=dict(color='white')
                     ),
                     scene=dict(
                         xaxis_title="East (m)",
@@ -1785,21 +1952,24 @@ if HAS_DASH:
                             up=dict(x=0, y=0, z=1),
                             center=dict(x=0, y=0, z=0)
                         ),
-                        bgcolor='rgba(20,20,20,1)',
+                        bgcolor='rgba(10,10,10,1)',
                         xaxis=dict(
-                            backgroundcolor='rgba(20,20,20,1)',
+                            backgroundcolor='rgba(10,10,10,1)',
                             gridcolor='gray',
-                            showbackground=True
+                            showbackground=True,
+                            color='white'
                         ),
                         yaxis=dict(
-                            backgroundcolor='rgba(20,20,20,1)',
+                            backgroundcolor='rgba(10,10,10,1)',
                             gridcolor='gray', 
-                            showbackground=True
+                            showbackground=True,
+                            color='white'
                         ),
                         zaxis=dict(
-                            backgroundcolor='rgba(20,20,20,1)',
+                            backgroundcolor='rgba(10,10,10,1)',
                             gridcolor='gray',
-                            showbackground=True
+                            showbackground=True,
+                            color='white'
                         )
                     ),
                     height=500,
@@ -1809,8 +1979,11 @@ if HAS_DASH:
                         x=0,
                         y=1,
                         traceorder='normal',
-                        bgcolor='rgba(0,0,0,0.5)'
-                    )
+                        bgcolor='rgba(0,0,0,0.5)',
+                        font=dict(color='white')
+                    ),
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)'
                 )
                 
                 return fig
@@ -1820,7 +1993,7 @@ if HAS_DASH:
                 return self._create_empty_plot("3D Trajectory", f"Error: {str(e)}")
         
         def _create_position_plot(self):
-            """Create position tracking plot - FIXED: Proper data handling"""
+            """Create position tracking plot"""
             try:
                 if not self.position_history:
                     return self._create_empty_plot("Position", "Waiting for data...")
@@ -1837,28 +2010,28 @@ if HAS_DASH:
                 # Horizontal position
                 fig.add_trace(
                     go.Scatter(x=times, y=[d['x'] for d in df], 
-                             name='North', line=dict(color='#FF4444'), mode='lines'),
+                             name='North', line=dict(color='#FF6B6B'), mode='lines'),
                     row=1, col=1
                 )
                 fig.add_trace(
                     go.Scatter(x=times, y=[d['y'] for d in df], 
-                             name='East', line=dict(color='#44FF44'), mode='lines'),
+                             name='East', line=dict(color='#4ECDC4'), mode='lines'),
                     row=1, col=1
                 )
                 
                 # Vertical position (convert NED Down to Altitude)
                 fig.add_trace(
                     go.Scatter(x=times, y=[-d['z'] for d in df], 
-                             name='Altitude', line=dict(color='#4444FF'), mode='lines'),
+                             name='Altitude', line=dict(color='#45B7D1'), mode='lines'),
                     row=2, col=1
                 )
                 
-                fig.update_xaxes(title_text="Time (s)", row=2, col=1)
-                fig.update_yaxes(title_text="Position (m)", row=1, col=1)
-                fig.update_yaxes(title_text="Altitude (m)", row=2, col=1)
+                fig.update_xaxes(title_text="Time (s)", row=2, col=1, color='white')
+                fig.update_yaxes(title_text="Position (m)", row=1, col=1, color='white')
+                fig.update_yaxes(title_text="Altitude (m)", row=2, col=1, color='white')
                 
                 fig.update_layout(
-                    title=dict(text="Position Tracking", x=0.5, xanchor='center'),
+                    title=dict(text="Position Tracking", x=0.5, xanchor='center', font=dict(color='white')),
                     height=500,
                     template="plotly_dark",
                     showlegend=True,
@@ -1867,8 +2040,11 @@ if HAS_DASH:
                         yanchor="bottom",
                         y=1.02,
                         xanchor="right",
-                        x=1
-                    )
+                        x=1,
+                        font=dict(color='white')
+                    ),
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)'
                 )
                 
                 return fig
@@ -1878,7 +2054,7 @@ if HAS_DASH:
                 return self._create_empty_plot("Position", f"Error: {str(e)}")
         
         def _create_attitude_plot(self):
-            """Create attitude tracking plot - FIXED: Real data from FC"""
+            """Create attitude tracking plot"""
             try:
                 if not self.attitude_history:
                     return self._create_empty_plot("Attitude", "Waiting for data...")
@@ -1891,24 +2067,26 @@ if HAS_DASH:
                 # Convert radians to degrees for display
                 fig.add_trace(go.Scatter(
                     x=times, y=[np.degrees(d['roll']) for d in df], 
-                    name='Roll', line=dict(color='#FF4444', width=2), mode='lines'
+                    name='Roll', line=dict(color='#FF6B6B', width=2), mode='lines'
                 ))
                 fig.add_trace(go.Scatter(
                     x=times, y=[np.degrees(d['pitch']) for d in df], 
-                    name='Pitch', line=dict(color='#44FF44', width=2), mode='lines'
+                    name='Pitch', line=dict(color='#4ECDC4', width=2), mode='lines'
                 ))
                 fig.add_trace(go.Scatter(
                     x=times, y=[np.degrees(d['yaw']) for d in df], 
-                    name='Yaw', line=dict(color='#4444FF', width=2), mode='lines'
+                    name='Yaw', line=dict(color='#45B7D1', width=2), mode='lines'
                 ))
                 
                 fig.update_layout(
-                    title=dict(text="Attitude (Degrees)", x=0.5, xanchor='center'),
+                    title=dict(text="Attitude (Degrees)", x=0.5, xanchor='center', font=dict(color='white')),
                     xaxis_title="Time (s)",
                     yaxis_title="Angle (deg)",
                     height=500,
                     template="plotly_dark",
-                    showlegend=True
+                    showlegend=True,
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)'
                 )
                 
                 # Add zero reference line
@@ -1921,7 +2099,7 @@ if HAS_DASH:
                 return self._create_empty_plot("Attitude", f"Error: {str(e)}")
         
         def _create_control_plot(self):
-            """Create control output plot - FIXED: Real control data"""
+            """Create control output plot"""
             try:
                 if not self.fc.control_history:
                     return self._create_empty_plot("Controls", "Waiting for control data...")
@@ -1937,7 +2115,7 @@ if HAS_DASH:
                 )
                 
                 control_names = ['Throttle', 'Roll', 'Pitch', 'Yaw']
-                colors = ['#FF4444', '#44FF44', '#4444FF', '#FFFF44']
+                colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4']
                 
                 for i in range(4):
                     row = (i // 2) + 1
@@ -1953,16 +2131,18 @@ if HAS_DASH:
                         row=row, col=col
                     )
                 
-                fig.update_xaxes(title_text="Time (s)", row=2, col=1)
-                fig.update_xaxes(title_text="Time (s)", row=2, col=2)
-                fig.update_yaxes(title_text="Value", row=1, col=1)
-                fig.update_yaxes(title_text="Value", row=1, col=2)
+                fig.update_xaxes(title_text="Time (s)", row=2, col=1, color='white')
+                fig.update_xaxes(title_text="Time (s)", row=2, col=2, color='white')
+                fig.update_yaxes(title_text="Value", row=1, col=1, color='white')
+                fig.update_yaxes(title_text="Value", row=1, col=2, color='white')
                 
                 fig.update_layout(
-                    title=dict(text="Control Outputs", x=0.5, xanchor='center'),
+                    title=dict(text="Control Outputs", x=0.5, xanchor='center', font=dict(color='white')),
                     height=500,
                     template="plotly_dark",
-                    showlegend=False
+                    showlegend=False,
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)'
                 )
                 
                 return fig
@@ -1975,7 +2155,7 @@ if HAS_DASH:
             """Create an empty plot with message"""
             fig = go.Figure()
             fig.update_layout(
-                title=dict(text=title, x=0.5, xanchor='center'),
+                title=dict(text=title, x=0.5, xanchor='center', font=dict(color='white')),
                 xaxis={'visible': False},
                 yaxis={'visible': False},
                 annotations=[dict(
@@ -1987,14 +2167,17 @@ if HAS_DASH:
                 )],
                 height=500,
                 template="plotly_dark",
-                margin=dict(l=20, r=20, t=60, b=20)
+                margin=dict(l=20, r=20, t=60, b=20),
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)'
             )
             return fig
         
         def run(self, debug: bool = False, port: int = 8050):
             """Start the dashboard server"""
-            logger.info(f"🚀 Starting UAV Dashboard on http://localhost:{port}")
+            logger.info(f"🚀 Starting Modern UAV Dashboard on http://localhost:{port}")
             self.app.run(debug=debug, port=port, host='0.0.0.0')
+            
 # ============================================================================
 # PART 7: SIMULATION MANAGER - FIXED DATA FLOW
 # ============================================================================
