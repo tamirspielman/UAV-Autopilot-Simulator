@@ -1240,26 +1240,20 @@ class FlightController:
             'gps_fix': True,
             'waypoint_index': self.current_waypoint_index,
             'mission_complete': self.mission_complete
-        }
-# ============================================================================
-# PART 6: INTERACTIVE DASHBOARD - FULLY FIXED
+        }# ============================================================================
+# PART 6: INTERACTIVE DASHBOARD - FIXED INTERVAL COMPONENT
 # ============================================================================
 
 if HAS_DASH:
     class UAVDashboard:
         """
         Interactive dashboard for real-time monitoring and control
-        Fully fixed with working components
+        Fixed Interval component placement
         """
         
         def __init__(self, flight_controller: FlightController):
             self.fc = flight_controller
-            
-            # Create app with bootstrap components
-            if HAS_DBC:
-                self.app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
-            else:
-                self.app = dash.Dash(__name__)
+            self.app = dash.Dash(__name__)
                 
             self.setup_layout()
             self.setup_callbacks()
@@ -1271,241 +1265,194 @@ if HAS_DASH:
             self.start_time = time.time()
             
         def setup_layout(self):
-            """Setup the dashboard layout with working components"""
+            """Setup the dashboard layout using basic Dash components"""
             
-            # Header
-            header = dbc.Row([
-                dbc.Col([
-                    html.H1("AI-Based UAV Autopilot Simulator", 
-                           className="text-center mb-2",
-                           style={'color': '#00ff00', 'fontWeight': 'bold'}),
-                    html.H4("Real-time Flight Control System", 
-                           className="text-center mb-4",
-                           style={'color': '#cccccc'})
-                ], width=12)
-            ])
+            # Custom CSS for styling
+            styles = {
+                'container': {'backgroundColor': '#1a1a1a', 'minHeight': '100vh', 'padding': '20px'},
+                'header': {'color': '#00ff00', 'fontWeight': 'bold', 'textAlign': 'center'},
+                'card': {'backgroundColor': '#2c3e50', 'border': '1px solid #00ff00', 'borderRadius': '5px', 'padding': '15px', 'marginBottom': '15px'},
+                'cardHeader': {'color': 'white', 'fontWeight': 'bold', 'borderBottom': '1px solid #00ff00', 'paddingBottom': '10px', 'marginBottom': '10px'},
+                'button': {'backgroundColor': '#3498db', 'color': 'white', 'border': 'none', 'padding': '10px', 'margin': '5px', 'borderRadius': '3px', 'width': '100%'},
+                'buttonSuccess': {'backgroundColor': '#27ae60', 'color': 'white', 'border': 'none', 'padding': '10px', 'margin': '5px', 'borderRadius': '3px', 'width': '100%'},
+                'buttonWarning': {'backgroundColor': '#f39c12', 'color': 'white', 'border': 'none', 'padding': '10px', 'margin': '5px', 'borderRadius': '3px', 'width': '100%'},
+                'buttonDanger': {'backgroundColor': '#e74c3c', 'color': 'white', 'border': 'none', 'padding': '10px', 'margin': '5px', 'borderRadius': '3px', 'width': '100%'},
+                'dropdown': {'backgroundColor': '#34495e', 'color': 'white', 'border': '1px solid #00ff00'},
+                'table': {'color': 'white', 'width': '100%', 'borderCollapse': 'collapse'},
+                'tableHeader': {'backgroundColor': '#2c3e50', 'color': '#00ff00', 'padding': '8px', 'border': '1px solid #00ff00'},
+                'tableCell': {'padding': '8px', 'border': '1px solid #00ff00'}
+            }
             
-            # Flight Controls Card
-            flight_controls_card = dbc.Card([
-                dbc.CardHeader([
-                    html.H4("🚀 Flight Controls", className="mb-0")
-                ], style={'backgroundColor': '#2c3e50'}),
-                dbc.CardBody([
-                    # Flight Mode Selection
-                    html.Div([
-                        html.Label("Flight Mode", className="form-label"),
-                        dcc.Dropdown(
-                            id='flight-mode-dropdown',
-                            options=[
-                                {'label': '🛸 MANUAL', 'value': 'manual'},
-                                {'label': '⚡ STABILIZE', 'value': 'stabilize'},
-                                {'label': '📊 ALTITUDE HOLD', 'value': 'altitude_hold'},
-                                {'label': '🎯 POSITION HOLD', 'value': 'position_hold'},
-                                {'label': '🔄 AUTO MISSION', 'value': 'auto'},
-                                {'label': '🏠 RETURN TO LAUNCH', 'value': 'return_to_launch'},
-                                {'label': '🛬 LAND', 'value': 'land'},
-                                {'label': '🤖 AI PILOT', 'value': 'ai_pilot'}
-                            ],
-                            value='stabilize',
-                            clearable=False
-                        )
-                    ], className="mb-3"),
-                    
-                    # Altitude Control
-                    html.Div([
-                        html.Label("Altitude Setpoint (m)", className="form-label"),
-                        dcc.Slider(
-                            id='altitude-slider',
-                            min=1, 
-                            max=100, 
-                            step=1, 
-                            value=10,
-                            marks={i: str(i) for i in range(0, 101, 20)},
-                            tooltip={"placement": "bottom", "always_visible": True}
-                        )
-                    ], className="mb-4"),
-                    
-                    # Quick Action Buttons
-                    html.Div([
-                        html.Label("Quick Actions", className="form-label"),
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Button("🚀 Takeoff", id='takeoff-btn', color="success", className="w-100 mb-2")
-                            ], width=6),
-                            dbc.Col([
-                                dbc.Button("🛬 Land", id='land-btn', color="warning", className="w-100 mb-2")
-                            ], width=6)
-                        ]),
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Button("🏠 RTL", id='rtl-btn', color="danger", className="w-100 mb-2")
-                            ], width=6),
-                            dbc.Col([
-                                dbc.Button("⏸️ Pause", id='pause-btn', color="secondary", className="w-100 mb-2")
-                            ], width=6)
-                        ])
-                    ])
-                ])
-            ], className="mb-4")
-            
-            # System Status Card
-            system_status_card = dbc.Card([
-                dbc.CardHeader([
-                    html.H4("📊 System Status", className="mb-0")
-                ], style={'backgroundColor': '#2c3e50'}),
-                dbc.CardBody([
-                    html.Div([
-                        dbc.Row([
-                            dbc.Col([
-                                html.Div("UAV Status", className="text-muted small"),
-                                html.Div("🟢 ONLINE", id="uav-status", 
-                                       style={'color': '#00ff00', 'fontWeight': 'bold', 'fontSize': '18px'})
-                            ], width=6),
-                            dbc.Col([
-                                html.Div("GPS Fix", className="text-muted small"),
-                                html.Div("🟢 3D FIX", id="gps-status",
-                                       style={'color': '#00ff00', 'fontWeight': 'bold', 'fontSize': '18px'})
-                            ], width=6)
-                        ], className="mb-3"),
-                        dbc.Row([
-                            dbc.Col([
-                                html.Div("Battery", className="text-muted small"),
-                                html.Div("🔋 85%", id="battery-status",
-                                       style={'color': '#ffa500', 'fontWeight': 'bold', 'fontSize': '18px'})
-                            ], width=6),
-                            dbc.Col([
-                                html.Div("Sensors", className="text-muted small"),
-                                html.Div("🟢 OK", id="sensor-status",
-                                       style={'color': '#00ff00', 'fontWeight': 'bold', 'fontSize': '18px'})
-                            ], width=6)
-                        ])
-                    ])
-                ])
-            ], className="mb-4")
-            
-            # Mission Planning Card
-            mission_card = dbc.Card([
-                dbc.CardHeader([
-                    html.H4("🎯 Mission Planning", className="mb-0")
-                ], style={'backgroundColor': '#2c3e50'}),
-                dbc.CardBody([
-                    html.Div([
-                        html.Label("Waypoints (JSON format)", className="form-label"),
-                        dcc.Textarea(
-                            id='waypoint-input',
-                            value='[[0, 0, -10], [15, 0, -15], [15, 15, -20], [0, 15, -15], [0, 0, -10]]',
-                            style={'width': '100%', 'height': '100px', 'fontFamily': 'monospace'},
-                            placeholder='Enter waypoints as: [[x1,y1,z1],[x2,y2,z2],...]'
-                        ),
-                    ], className="mb-3"),
-                    dbc.Row([
-                        dbc.Col([
-                            dbc.Button("📤 Upload Mission", id='upload-mission-btn', color="primary", className="w-100")
-                        ], width=6),
-                        dbc.Col([
-                            dbc.Button("🗑️ Clear", id='clear-mission-btn', color="outline-secondary", className="w-100")
-                        ], width=6)
-                    ]),
-                    html.Div(id='mission-status', className="mt-3")
-                ])
-            ], className="mb-4")
-            
-            # Telemetry Display Card
-            telemetry_card = dbc.Card([
-                dbc.CardHeader([
-                    html.H4("📡 Real-time Telemetry", className="mb-0")
-                ], style={'backgroundColor': '#2c3e50'}),
-                dbc.CardBody([
-                    html.Div(id='telemetry-display', children=[
-                        html.Div("Waiting for telemetry data...", className="text-muted text-center")
-                    ])
-                ])
-            ])
-            
-            # Visualization Area
-            visualization_card = dbc.Card([
-                dbc.CardHeader([
-                    dbc.Tabs([
-                        dbc.Tab(label="3D Trajectory", tab_id="tab-3d"),
-                        dbc.Tab(label="Position", tab_id="tab-position"),
-                        dbc.Tab(label="Attitude", tab_id="tab-attitude"),
-                        dbc.Tab(label="Controls", tab_id="tab-controls"),
-                    ], id="visualization-tabs", active_tab="tab-3d", className="nav-fill")
-                ], style={'backgroundColor': '#2c3e50'}),
-                dbc.CardBody([
-                    html.Div(id="visualization-content", style={'height': '500px'})
-                ])
-            ], className="mb-4")
-            
-            # Performance Metrics
-            performance_card = dbc.Card([
-                dbc.CardHeader([
-                    html.H4("⚡ Performance Metrics", className="mb-0")
-                ], style={'backgroundColor': '#2c3e50'}),
-                dbc.CardBody([
-                    dbc.Row([
-                        dbc.Col([
-                            html.Div("Update Rate", className="text-muted small text-center"),
-                            html.Div("100 Hz", id="update-rate", 
-                                   className="text-success text-center fw-bold fs-4")
-                        ], width=3),
-                        dbc.Col([
-                            html.Div("CPU Usage", className="text-muted small text-center"),
-                            html.Div("2.5%", id="cpu-usage",
-                                   className="text-success text-center fw-bold fs-4")
-                        ], width=3),
-                        dbc.Col([
-                            html.Div("Memory", className="text-muted small text-center"),
-                            html.Div("45 MB", id="memory-usage",
-                                   className="text-success text-center fw-bold fs-4")
-                        ], width=3),
-                        dbc.Col([
-                            html.Div("Real-time", className="text-muted small text-center"),
-                            html.Div("1.0x", id="rt-factor",
-                                   className="text-success text-center fw-bold fs-4")
-                        ], width=3),
-                    ])
-                ])
-            ])
-            
-            # Assemble layout
-            self.app.layout = dbc.Container([
-                header,
-                html.Hr(),
-                
-                dbc.Row([
-                    # Left sidebar - Controls
-                    dbc.Col([
-                        flight_controls_card,
-                        system_status_card,
-                        mission_card,
-                        telemetry_card
-                    ], width=3),
-                    
-                    # Main content - Visualizations
-                    dbc.Col([
-                        visualization_card,
-                        performance_card
-                    ], width=9)
+            self.app.layout = html.Div([
+                # Header
+                html.Div([
+                    html.H1("AI-Based UAV Autopilot Simulator", style=styles['header']),
+                    html.H4("Real-time Flight Control System", style={'color': '#cccccc', 'textAlign': 'center'})
                 ]),
                 
-                # Hidden storage and update components
-                dcc.Store(id='simulation-state'),
+                html.Hr(style={'borderColor': '#00ff00', 'margin': '20px 0'}),
+                
+                html.Div([
+                    # Left sidebar - Controls
+                    html.Div([
+                        # Flight Controls Card
+                        html.Div([
+                            html.H4("🚀 Flight Controls", style=styles['cardHeader']),
+                            
+                            # Flight Mode Selection
+                            html.Div([
+                                html.Label("Flight Mode", style={'color': 'white', 'marginBottom': '5px'}),
+                                dcc.Dropdown(
+                                    id='flight-mode-dropdown',
+                                    options=[
+                                        {'label': '🛸 MANUAL', 'value': 'manual'},
+                                        {'label': '⚡ STABILIZE', 'value': 'stabilize'},
+                                        {'label': '📊 ALTITUDE HOLD', 'value': 'altitude_hold'},
+                                        {'label': '🎯 POSITION HOLD', 'value': 'position_hold'},
+                                        {'label': '🔄 AUTO MISSION', 'value': 'auto'},
+                                        {'label': '🏠 RETURN TO LAUNCH', 'value': 'return_to_launch'},
+                                        {'label': '🛬 LAND', 'value': 'land'},
+                                        {'label': '🤖 AI PILOT', 'value': 'ai_pilot'}
+                                    ],
+                                    value='stabilize',
+                                    style=styles['dropdown']
+                                )
+                            ], style={'marginBottom': '15px'}),
+                            
+                            # Altitude Control
+                            html.Div([
+                                html.Label("Altitude Setpoint (m)", style={'color': 'white', 'marginBottom': '5px'}),
+                                dcc.Slider(
+                                    id='altitude-slider',
+                                    min=1, 
+                                    max=100, 
+                                    step=1, 
+                                    value=10,
+                                    marks={i: str(i) for i in range(0, 101, 20)},
+                                    tooltip={"placement": "bottom", "always_visible": True}
+                                )
+                            ], style={'marginBottom': '20px'}),
+                            
+                            # Quick Action Buttons
+                            html.Div([
+                                html.Label("Quick Actions", style={'color': 'white', 'marginBottom': '10px'}),
+                                html.Div([
+                                    html.Button("🚀 Takeoff", id='takeoff-btn', style=styles['buttonSuccess']),
+                                    html.Button("🛬 Land", id='land-btn', style=styles['buttonWarning'])
+                                ], style={'display': 'flex', 'gap': '10px'}),
+                                html.Div([
+                                    html.Button("🏠 RTL", id='rtl-btn', style=styles['buttonDanger']),
+                                    html.Button("⏸️ Pause", id='pause-btn', style=styles['button'])
+                                ], style={'display': 'flex', 'gap': '10px'})
+                            ])
+                        ], style=styles['card']),
+                        
+                        # System Status Card
+                        html.Div([
+                            html.H4("📊 System Status", style=styles['cardHeader']),
+                            html.Div([
+                                html.Div([
+                                    html.Div("UAV Status", style={'color': '#cccccc', 'fontSize': '12px'}),
+                                    html.Div("🟢 ONLINE", id="uav-status", style={'color': '#00ff00', 'fontWeight': 'bold', 'fontSize': '16px'})
+                                ], style={'marginBottom': '10px'}),
+                                html.Div([
+                                    html.Div("GPS Fix", style={'color': '#cccccc', 'fontSize': '12px'}),
+                                    html.Div("🟢 3D FIX", id="gps-status", style={'color': '#00ff00', 'fontWeight': 'bold', 'fontSize': '16px'})
+                                ], style={'marginBottom': '10px'}),
+                                html.Div([
+                                    html.Div("Battery", style={'color': '#cccccc', 'fontSize': '12px'}),
+                                    html.Div("🔋 85%", id="battery-status", style={'color': '#ffa500', 'fontWeight': 'bold', 'fontSize': '16px'})
+                                ], style={'marginBottom': '10px'}),
+                                html.Div([
+                                    html.Div("Sensors", style={'color': '#cccccc', 'fontSize': '12px'}),
+                                    html.Div("🟢 OK", id="sensor-status", style={'color': '#00ff00', 'fontWeight': 'bold', 'fontSize': '16px'})
+                                ])
+                            ])
+                        ], style=styles['card']),
+                        
+                        # Mission Planning Card
+                        html.Div([
+                            html.H4("🎯 Mission Planning", style=styles['cardHeader']),
+                            html.Div([
+                                html.Label("Waypoints (JSON format)", style={'color': 'white', 'marginBottom': '5px'}),
+                                dcc.Textarea(
+                                    id='waypoint-input',
+                                    value='[[0, 0, -10], [15, 0, -15], [15, 15, -20], [0, 15, -15], [0, 0, -10]]',
+                                    style={'width': '100%', 'height': '100px', 'fontFamily': 'monospace', 'backgroundColor': '#34495e', 'color': 'white', 'border': '1px solid #00ff00'},
+                                    placeholder='Enter waypoints as: [[x1,y1,z1],[x2,y2,z2],...]'
+                                ),
+                            ], style={'marginBottom': '15px'}),
+                            html.Div([
+                                html.Button("📤 Upload Mission", id='upload-mission-btn', style=styles['button']),
+                                html.Button("🗑️ Clear", id='clear-mission-btn', style={**styles['button'], 'backgroundColor': '#95a5a6'})
+                            ], style={'display': 'flex', 'gap': '10px'}),
+                            html.Div(id='mission-status', style={'marginTop': '15px'})
+                        ], style=styles['card']),
+                        
+                        # Telemetry Display Card
+                        html.Div([
+                            html.H4("📡 Real-time Telemetry", style=styles['cardHeader']),
+                            html.Div(id='telemetry-display', children=[
+                                html.Div("Waiting for telemetry data...", style={'color': '#cccccc', 'textAlign': 'center'})
+                            ])
+                        ], style=styles['card'])
+                    ], style={'width': '30%', 'float': 'left', 'paddingRight': '15px'}),
+                    
+                    # Main content - Visualizations
+                    html.Div([
+                        # Visualization Tabs
+                        html.Div([
+                            html.H4("📊 Visualizations", style=styles['cardHeader']),
+                            dcc.Tabs(id="visualization-tabs", value='tab-3d', children=[
+                                dcc.Tab(label='3D Trajectory', value='tab-3d'),
+                                dcc.Tab(label='Position', value='tab-position'),
+                                dcc.Tab(label='Attitude', value='tab-attitude'),
+                                dcc.Tab(label='Controls', value='tab-controls'),
+                            ], style={'marginBottom': '15px'}),
+                            html.Div(id="visualization-content", style={'height': '500px'})
+                        ], style=styles['card']),
+                        
+                        # Performance Metrics
+                        html.Div([
+                            html.H4("⚡ Performance Metrics", style=styles['cardHeader']),
+                            html.Div([
+                                html.Div([
+                                    html.Div("Update Rate", style={'color': '#cccccc', 'textAlign': 'center', 'fontSize': '12px'}),
+                                    html.Div("100 Hz", id="update-rate", style={'color': '#00ff00', 'textAlign': 'center', 'fontWeight': 'bold', 'fontSize': '20px'})
+                                ], style={'display': 'inline-block', 'width': '24%', 'textAlign': 'center'}),
+                                html.Div([
+                                    html.Div("CPU Usage", style={'color': '#cccccc', 'textAlign': 'center', 'fontSize': '12px'}),
+                                    html.Div("2.5%", id="cpu-usage", style={'color': '#00ff00', 'textAlign': 'center', 'fontWeight': 'bold', 'fontSize': '20px'})
+                                ], style={'display': 'inline-block', 'width': '24%', 'textAlign': 'center'}),
+                                html.Div([
+                                    html.Div("Memory", style={'color': '#cccccc', 'textAlign': 'center', 'fontSize': '12px'}),
+                                    html.Div("45 MB", id="memory-usage", style={'color': '#00ff00', 'textAlign': 'center', 'fontWeight': 'bold', 'fontSize': '20px'})
+                                ], style={'display': 'inline-block', 'width': '24%', 'textAlign': 'center'}),
+                                html.Div([
+                                    html.Div("Real-time", style={'color': '#cccccc', 'textAlign': 'center', 'fontSize': '12px'}),
+                                    html.Div("1.0x", id="rt-factor", style={'color': '#00ff00', 'textAlign': 'center', 'fontWeight': 'bold', 'fontSize': '20px'})
+                                ], style={'display': 'inline-block', 'width': '24%', 'textAlign': 'center'})
+                            ])
+                        ], style=styles['card'])
+                    ], style={'width': '68%', 'float': 'right'})
+                ], style={'overflow': 'hidden'}),  # Clear float
+                
+                # Update Interval - FIXED: Just include it in the layout, don't call it
                 dcc.Interval(
                     id='update-interval',
                     interval=200,  # Update every 200ms (5Hz)
                     n_intervals=0
                 )
                 
-            ], fluid=True, style={'backgroundColor': '#1a1a1a', 'minHeight': '100vh', 'padding': '20px'})
+            ], style=styles['container'])
         
         def setup_callbacks(self):
-            """Setup all dashboard callbacks - FIXED"""
+            """Setup all dashboard callbacks - FIXED: No Interval call here"""
             
             # Visualization tab content
             @self.app.callback(
                 Output('visualization-content', 'children'),
-                [Input('visualization-tabs', 'active_tab'),
+                [Input('visualization-tabs', 'value'),
                  Input('update-interval', 'n_intervals')]
             )
             def update_visualization(active_tab, n):
@@ -1562,26 +1509,43 @@ if HAS_DASH:
                         'z': telemetry['position'][2]
                     })
                     
-                    # Create telemetry display
-                    telemetry_display = dbc.Table([
-                        html.Thead(html.Tr([
-                            html.Th("Parameter"), html.Th("Value")
-                        ])),
-                        html.Tbody([
-                            html.Tr([html.Td("Position (N,E,D)"), 
-                                    html.Td(f"{telemetry['position'][0]:.1f}, {telemetry['position'][1]:.1f}, {telemetry['position'][2]:.1f}")]),
-                            html.Tr([html.Td("Velocity (m/s)"), 
-                                    html.Td(f"{telemetry['velocity'][0]:.1f}, {telemetry['velocity'][1]:.1f}, {telemetry['velocity'][2]:.1f}")]),
-                            html.Tr([html.Td("Attitude (R,P,Y)"), 
-                                    html.Td(f"{np.degrees(telemetry['attitude'][0]):.1f}°, {np.degrees(telemetry['attitude'][1]):.1f}°, {np.degrees(telemetry['attitude'][2]):.1f}°")]),
-                            html.Tr([html.Td("Flight Mode"), 
-                                    html.Td(telemetry['flight_mode'].upper())]),
-                            html.Tr([html.Td("Waypoint Progress"), 
-                                    html.Td(f"{telemetry['waypoint_index'] + 1}/{len(self.fc.waypoints) if self.fc.waypoints else 0}")]),
-                            html.Tr([html.Td("Mission Status"), 
-                                    html.Td("COMPLETE" if telemetry['mission_complete'] else "ACTIVE")]),
-                        ])
-                    ], bordered=True, hover=True, size="sm", responsive=True)
+                    # Create telemetry display table
+                    telemetry_display = html.Table([
+                        html.Tr([
+                            html.Th("Parameter", style={'backgroundColor': '#2c3e50', 'color': '#00ff00', 'padding': '8px', 'border': '1px solid #00ff00'}),
+                            html.Th("Value", style={'backgroundColor': '#2c3e50', 'color': '#00ff00', 'padding': '8px', 'border': '1px solid #00ff00'})
+                        ]),
+                        html.Tr([
+                            html.Td("Position (N,E,D)", style={'padding': '8px', 'border': '1px solid #00ff00', 'color': 'white'}),
+                            html.Td(f"{telemetry['position'][0]:.1f}, {telemetry['position'][1]:.1f}, {telemetry['position'][2]:.1f}", 
+                                   style={'padding': '8px', 'border': '1px solid #00ff00', 'color': '#00ff00'})
+                        ]),
+                        html.Tr([
+                            html.Td("Velocity (m/s)", style={'padding': '8px', 'border': '1px solid #00ff00', 'color': 'white'}),
+                            html.Td(f"{telemetry['velocity'][0]:.1f}, {telemetry['velocity'][1]:.1f}, {telemetry['velocity'][2]:.1f}", 
+                                   style={'padding': '8px', 'border': '1px solid #00ff00', 'color': '#00ff00'})
+                        ]),
+                        html.Tr([
+                            html.Td("Attitude (R,P,Y)", style={'padding': '8px', 'border': '1px solid #00ff00', 'color': 'white'}),
+                            html.Td(f"{np.degrees(telemetry['attitude'][0]):.1f}°, {np.degrees(telemetry['attitude'][1]):.1f}°, {np.degrees(telemetry['attitude'][2]):.1f}°", 
+                                   style={'padding': '8px', 'border': '1px solid #00ff00', 'color': '#00ff00'})
+                        ]),
+                        html.Tr([
+                            html.Td("Flight Mode", style={'padding': '8px', 'border': '1px solid #00ff00', 'color': 'white'}),
+                            html.Td(telemetry['flight_mode'].upper(), 
+                                   style={'padding': '8px', 'border': '1px solid #00ff00', 'color': '#00ff00'})
+                        ]),
+                        html.Tr([
+                            html.Td("Waypoint Progress", style={'padding': '8px', 'border': '1px solid #00ff00', 'color': 'white'}),
+                            html.Td(f"{telemetry['waypoint_index'] + 1}/{len(self.fc.waypoints) if self.fc.waypoints else 0}", 
+                                   style={'padding': '8px', 'border': '1px solid #00ff00', 'color': '#00ff00'})
+                        ]),
+                        html.Tr([
+                            html.Td("Mission Status", style={'padding': '8px', 'border': '1px solid #00ff00', 'color': 'white'}),
+                            html.Td("COMPLETE" if telemetry['mission_complete'] else "ACTIVE", 
+                                   style={'padding': '8px', 'border': '1px solid #00ff00', 'color': '#00ff00'})
+                        ]),
+                    ], style={'width': '100%', 'borderCollapse': 'collapse'})
                     
                     # Performance metrics (simulated)
                     update_rate = f"{(1/self.fc.dt):.0f} Hz"
@@ -1600,7 +1564,7 @@ if HAS_DASH:
                     
                 except Exception as e:
                     logger.error(f"Error updating dashboard: {e}")
-                    error_msg = html.Div(f"Error: {str(e)}", className="text-danger")
+                    error_msg = html.Div(f"Error: {str(e)}", style={'color': 'red'})
                     return (error_msg, "N/A", "N/A", "N/A", "N/A", "🔴 ERROR", "🔴 ERROR", "🔴 ERROR", "🔴 ERROR")
             
             # Mission control callbacks
@@ -1622,20 +1586,25 @@ if HAS_DASH:
                         waypoints = json.loads(waypoints_text)
                         waypoints_np = [np.array(wp) for wp in waypoints]
                         self.fc.set_waypoints(waypoints_np)
-                        return dbc.Alert(
+                        return html.Div(
                             f"✅ Mission uploaded with {len(waypoints)} waypoints!", 
-                            color="success", 
-                            duration=3000
+                            style={'color': '#27ae60', 'padding': '10px', 'border': '1px solid #27ae60', 'borderRadius': '3px'}
                         )
                     
                     elif button_id == 'clear-mission-btn':
                         self.fc.waypoints = []
                         self.fc.current_waypoint_index = 0
                         self.fc.mission_complete = False
-                        return dbc.Alert("🗑️ Mission cleared!", color="info", duration=3000)
+                        return html.Div(
+                            "🗑️ Mission cleared!", 
+                            style={'color': '#3498db', 'padding': '10px', 'border': '1px solid #3498db', 'borderRadius': '3px'}
+                        )
                         
                 except Exception as e:
-                    return dbc.Alert(f"❌ Error: {str(e)}", color="danger", duration=5000)
+                    return html.Div(
+                        f"❌ Error: {str(e)}", 
+                        style={'color': '#e74c3c', 'padding': '10px', 'border': '1px solid #e74c3c', 'borderRadius': '3px'}
+                    )
                 
                 return ""
             
@@ -1691,6 +1660,7 @@ if HAS_DASH:
                     self.fc.setpoints['altitude'] = -altitude  # Convert to NED
                 return altitude
         
+        # Keep all the plot creation methods the same as before
         def _create_3d_trajectory(self):
             """Create 3D trajectory plot"""
             try:
