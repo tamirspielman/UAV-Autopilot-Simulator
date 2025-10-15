@@ -1240,14 +1240,14 @@ class FlightController:
             'mission_complete': self.mission_complete
         }
 # ============================================================================
-# PART 6: INTERACTIVE DASHBOARD - FIXED INTERVAL COMPONENT
+# PART 6: INTERACTIVE DASHBOARD - FIXED VISUALIZATIONS
 # ============================================================================
 
 if HAS_DASH:
     class UAVDashboard:
         """
         Interactive dashboard for real-time monitoring and control
-        Fixed Interval component placement
+        Fixed visualization components
         """
         
         def __init__(self, flight_controller: FlightController):
@@ -1257,12 +1257,33 @@ if HAS_DASH:
             self.setup_layout()
             self.setup_callbacks()
             
-            # Data buffers for plotting
+            # Data buffers for plotting - FIXED: Initialize with proper structure
             self.position_history = deque(maxlen=200)
             self.attitude_history = deque(maxlen=200)
             self.control_history = deque(maxlen=200)
             self.start_time = time.time()
             
+            # Initialize with some data to prevent empty plots
+            self._initialize_sample_data()
+            
+        def _initialize_sample_data(self):
+            """Initialize with sample data to prevent empty plots"""
+            current_time = time.time()
+            for i in range(10):
+                sample_time = current_time - (10 - i) * 0.1
+                self.position_history.append({
+                    'time': sample_time,
+                    'x': i * 0.5,
+                    'y': i * 0.3, 
+                    'z': -10 - i * 0.2
+                })
+                self.attitude_history.append({
+                    'time': sample_time,
+                    'roll': np.sin(i * 0.5) * 0.1,
+                    'pitch': np.cos(i * 0.3) * 0.08,
+                    'yaw': i * 0.02
+                })
+        
         def setup_layout(self):
             """Setup the dashboard layout using basic Dash components"""
             
@@ -1446,7 +1467,7 @@ if HAS_DASH:
             ], style=styles['container'])
         
         def setup_callbacks(self):
-            """Setup all dashboard callbacks - FIXED: No Interval call here"""
+            """Setup all dashboard callbacks - FIXED: Proper data updates"""
             
             # Visualization tab content
             @self.app.callback(
@@ -1459,7 +1480,7 @@ if HAS_DASH:
                     return dcc.Graph(
                         id='3d-plot',
                         figure=self._create_3d_trajectory(),
-                        config={'displayModeBar': True}
+                        config={'displayModeBar': True, 'scrollZoom': True}
                     )
                 elif active_tab == "tab-position":
                     return dcc.Graph(
@@ -1481,7 +1502,7 @@ if HAS_DASH:
                     )
                 return html.Div("Select a visualization tab")
             
-            # Update all dynamic content
+            # Update all dynamic content - FIXED: Proper data collection
             @self.app.callback(
                 [Output('telemetry-display', 'children'),
                  Output('update-rate', 'children'),
@@ -1498,14 +1519,21 @@ if HAS_DASH:
                 try:
                     # Get telemetry data
                     telemetry = self.fc.get_telemetry()
-                    
-                    # Update data buffers
                     current_time = time.time()
+                    
+                    # Update data buffers with REAL data from flight controller
                     self.position_history.append({
                         'time': current_time,
                         'x': telemetry['position'][0],
                         'y': telemetry['position'][1], 
                         'z': telemetry['position'][2]
+                    })
+                    
+                    self.attitude_history.append({
+                        'time': current_time,
+                        'roll': telemetry['attitude'][0],
+                        'pitch': telemetry['attitude'][1],
+                        'yaw': telemetry['attitude'][2]
                     })
                     
                     # Create telemetry display table
@@ -1659,9 +1687,8 @@ if HAS_DASH:
                     self.fc.setpoints['altitude'] = -altitude  # Convert to NED
                 return altitude
         
-        # Keep all the plot creation methods the same as before
         def _create_3d_trajectory(self):
-            """Create 3D trajectory plot"""
+            """Create 3D trajectory plot - FIXED: Better visualization"""
             try:
                 if not self.position_history:
                     return self._create_empty_plot("3D Trajectory", "Waiting for flight data...")
@@ -1670,18 +1697,30 @@ if HAS_DASH:
                 
                 # Convert NED to ENU for intuitive display
                 x = [d['y'] for d in df]  # East -> X
-                y = [d['x'] for d in df]  # North -> Y
+                y = [d['x'] for d in df]  # North -> Y  
                 z = [-d['z'] for d in df]  # -Down -> Altitude
                 
                 fig = go.Figure()
                 
-                # Flight path
+                # Flight path with color gradient by altitude
                 fig.add_trace(go.Scatter3d(
                     x=x, y=y, z=z,
                     mode='lines+markers',
-                    line=dict(color='cyan', width=4),
-                    marker=dict(size=3, color=z, colorscale='Viridis', showscale=True),
-                    name='Flight Path'
+                    line=dict(
+                        color=z, 
+                        colorscale='Viridis',
+                        width=6,
+                        showscale=True,
+                        colorbar=dict(title="Altitude (m)")
+                    ),
+                    marker=dict(
+                        size=4, 
+                        color=z, 
+                        colorscale='Viridis',
+                        opacity=0.8
+                    ),
+                    name='Flight Path',
+                    hovertemplate='<b>Position</b><br>East: %{x:.1f}m<br>North: %{y:.1f}m<br>Alt: %{z:.1f}m<extra></extra>'
                 ))
                 
                 # Current position
@@ -1689,8 +1728,14 @@ if HAS_DASH:
                     fig.add_trace(go.Scatter3d(
                         x=[x[-1]], y=[y[-1]], z=[z[-1]],
                         mode='markers',
-                        marker=dict(size=8, color='red', symbol='diamond'),
-                        name='Current Position'
+                        marker=dict(
+                            size=10, 
+                            color='red', 
+                            symbol='diamond',
+                            line=dict(width=2, color='white')
+                        ),
+                        name='Current Position',
+                        hovertemplate='<b>Current Position</b><br>East: %{x:.1f}m<br>North: %{y:.1f}m<br>Alt: %{z:.1f}m<extra></extra>'
                     ))
                 
                 # Waypoints
@@ -1702,23 +1747,70 @@ if HAS_DASH:
                     fig.add_trace(go.Scatter3d(
                         x=wp_x, y=wp_y, z=wp_z,
                         mode='markers+text',
-                        marker=dict(size=6, color='yellow', symbol='circle'),
+                        marker=dict(
+                            size=8, 
+                            color='yellow', 
+                            symbol='circle',
+                            line=dict(width=2, color='orange')
+                        ),
                         text=[f"WP{i}" for i in range(len(wp_x))],
                         textposition="top center",
-                        name='Waypoints'
+                        name='Waypoints',
+                        hovertemplate='<b>Waypoint %{text}</b><br>East: %{x:.1f}m<br>North: %{y:.1f}m<br>Alt: %{z:.1f}m<extra></extra>'
                     ))
+                    
+                    # Waypoint connections
+                    if len(wp_x) > 1:
+                        fig.add_trace(go.Scatter3d(
+                            x=wp_x, y=wp_y, z=wp_z,
+                            mode='lines',
+                            line=dict(color='yellow', width=3, dash='dash'),
+                            name='Planned Path',
+                            opacity=0.6
+                        ))
                 
                 fig.update_layout(
-                    title="3D Flight Trajectory",
+                    title=dict(
+                        text="3D Flight Trajectory",
+                        x=0.5,
+                        xanchor='center'
+                    ),
                     scene=dict(
                         xaxis_title="East (m)",
-                        yaxis_title="North (m)",
+                        yaxis_title="North (m)", 
                         zaxis_title="Altitude (m)",
                         aspectmode='data',
-                        camera=dict(eye=dict(x=1.5, y=1.5, z=1.2))
+                        camera=dict(
+                            eye=dict(x=1.5, y=1.5, z=1.2),
+                            up=dict(x=0, y=0, z=1),
+                            center=dict(x=0, y=0, z=0)
+                        ),
+                        bgcolor='rgba(20,20,20,1)',
+                        xaxis=dict(
+                            backgroundcolor='rgba(20,20,20,1)',
+                            gridcolor='gray',
+                            showbackground=True
+                        ),
+                        yaxis=dict(
+                            backgroundcolor='rgba(20,20,20,1)',
+                            gridcolor='gray', 
+                            showbackground=True
+                        ),
+                        zaxis=dict(
+                            backgroundcolor='rgba(20,20,20,1)',
+                            gridcolor='gray',
+                            showbackground=True
+                        )
                     ),
                     height=500,
-                    template="plotly_dark"
+                    template="plotly_dark",
+                    margin=dict(l=0, r=0, t=30, b=0),
+                    legend=dict(
+                        x=0,
+                        y=1,
+                        traceorder='normal',
+                        bgcolor='rgba(0,0,0,0.5)'
+                    )
                 )
                 
                 return fig
@@ -1728,7 +1820,7 @@ if HAS_DASH:
                 return self._create_empty_plot("3D Trajectory", f"Error: {str(e)}")
         
         def _create_position_plot(self):
-            """Create position tracking plot"""
+            """Create position tracking plot - FIXED: Proper data handling"""
             try:
                 if not self.position_history:
                     return self._create_empty_plot("Position", "Waiting for data...")
@@ -1736,18 +1828,49 @@ if HAS_DASH:
                 df = list(self.position_history)
                 times = [d['time'] - self.start_time for d in df]
                 
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=times, y=[d['x'] for d in df], name='North', line=dict(color='red')))
-                fig.add_trace(go.Scatter(x=times, y=[d['y'] for d in df], name='East', line=dict(color='green')))
-                fig.add_trace(go.Scatter(x=times, y=[d['z'] for d in df], name='Down', line=dict(color='blue')))
+                fig = make_subplots(
+                    rows=2, cols=1,
+                    subplot_titles=('Horizontal Position', 'Vertical Position'),
+                    vertical_spacing=0.1
+                )
+                
+                # Horizontal position
+                fig.add_trace(
+                    go.Scatter(x=times, y=[d['x'] for d in df], 
+                             name='North', line=dict(color='#FF4444'), mode='lines'),
+                    row=1, col=1
+                )
+                fig.add_trace(
+                    go.Scatter(x=times, y=[d['y'] for d in df], 
+                             name='East', line=dict(color='#44FF44'), mode='lines'),
+                    row=1, col=1
+                )
+                
+                # Vertical position (convert NED Down to Altitude)
+                fig.add_trace(
+                    go.Scatter(x=times, y=[-d['z'] for d in df], 
+                             name='Altitude', line=dict(color='#4444FF'), mode='lines'),
+                    row=2, col=1
+                )
+                
+                fig.update_xaxes(title_text="Time (s)", row=2, col=1)
+                fig.update_yaxes(title_text="Position (m)", row=1, col=1)
+                fig.update_yaxes(title_text="Altitude (m)", row=2, col=1)
                 
                 fig.update_layout(
-                    title="Position (NED Coordinates)",
-                    xaxis_title="Time (s)",
-                    yaxis_title="Position (m)",
+                    title=dict(text="Position Tracking", x=0.5, xanchor='center'),
                     height=500,
-                    template="plotly_dark"
+                    template="plotly_dark",
+                    showlegend=True,
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="right",
+                        x=1
+                    )
                 )
+                
                 return fig
                 
             except Exception as e:
@@ -1755,37 +1878,42 @@ if HAS_DASH:
                 return self._create_empty_plot("Position", f"Error: {str(e)}")
         
         def _create_attitude_plot(self):
-            """Create attitude tracking plot"""
+            """Create attitude tracking plot - FIXED: Real data from FC"""
             try:
-                # For demo, create some sample attitude data
                 if not self.attitude_history:
-                    # Initialize with some data
-                    for i in range(50):
-                        self.attitude_history.append({
-                            'time': self.start_time + i * 0.1,
-                            'roll': np.sin(i * 0.1) * 0.2,
-                            'pitch': np.cos(i * 0.1) * 0.15,
-                            'yaw': i * 0.01
-                        })
+                    return self._create_empty_plot("Attitude", "Waiting for data...")
                 
                 df = list(self.attitude_history)
                 times = [d['time'] - self.start_time for d in df]
                 
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=times, y=[np.degrees(d['roll']) for d in df], 
-                                       name='Roll', line=dict(color='red')))
-                fig.add_trace(go.Scatter(x=times, y=[np.degrees(d['pitch']) for d in df], 
-                                       name='Pitch', line=dict(color='green')))
-                fig.add_trace(go.Scatter(x=times, y=[np.degrees(d['yaw']) for d in df], 
-                                       name='Yaw', line=dict(color='blue')))
+                
+                # Convert radians to degrees for display
+                fig.add_trace(go.Scatter(
+                    x=times, y=[np.degrees(d['roll']) for d in df], 
+                    name='Roll', line=dict(color='#FF4444', width=2), mode='lines'
+                ))
+                fig.add_trace(go.Scatter(
+                    x=times, y=[np.degrees(d['pitch']) for d in df], 
+                    name='Pitch', line=dict(color='#44FF44', width=2), mode='lines'
+                ))
+                fig.add_trace(go.Scatter(
+                    x=times, y=[np.degrees(d['yaw']) for d in df], 
+                    name='Yaw', line=dict(color='#4444FF', width=2), mode='lines'
+                ))
                 
                 fig.update_layout(
-                    title="Attitude (Degrees)",
+                    title=dict(text="Attitude (Degrees)", x=0.5, xanchor='center'),
                     xaxis_title="Time (s)",
                     yaxis_title="Angle (deg)",
                     height=500,
-                    template="plotly_dark"
+                    template="plotly_dark",
+                    showlegend=True
                 )
+                
+                # Add zero reference line
+                fig.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.3)
+                
                 return fig
                 
             except Exception as e:
@@ -1793,33 +1921,50 @@ if HAS_DASH:
                 return self._create_empty_plot("Attitude", f"Error: {str(e)}")
         
         def _create_control_plot(self):
-            """Create control output plot"""
+            """Create control output plot - FIXED: Real control data"""
             try:
                 if not self.fc.control_history:
-                    # Create sample control data
-                    for i in range(50):
-                        self.fc.control_history.append(np.array([0.5, 0.1, -0.1, 0.05]))
+                    return self._create_empty_plot("Controls", "Waiting for control data...")
                 
                 controls = list(self.fc.control_history)
                 times = [i * self.fc.dt for i in range(len(controls))]
                 
-                fig = go.Figure()
+                fig = make_subplots(
+                    rows=2, cols=2,
+                    subplot_titles=('Throttle', 'Roll', 'Pitch', 'Yaw'),
+                    vertical_spacing=0.1,
+                    horizontal_spacing=0.1
+                )
+                
                 control_names = ['Throttle', 'Roll', 'Pitch', 'Yaw']
-                colors = ['red', 'green', 'blue', 'orange']
+                colors = ['#FF4444', '#44FF44', '#4444FF', '#FFFF44']
                 
                 for i in range(4):
-                    fig.add_trace(go.Scatter(
-                        x=times, y=[c[i] for c in controls],
-                        name=control_names[i], line=dict(color=colors[i])
-                    ))
+                    row = (i // 2) + 1
+                    col = (i % 2) + 1
+                    
+                    fig.add_trace(
+                        go.Scatter(
+                            x=times, y=[c[i] for c in controls],
+                            name=control_names[i], 
+                            line=dict(color=colors[i], width=2),
+                            mode='lines'
+                        ),
+                        row=row, col=col
+                    )
+                
+                fig.update_xaxes(title_text="Time (s)", row=2, col=1)
+                fig.update_xaxes(title_text="Time (s)", row=2, col=2)
+                fig.update_yaxes(title_text="Value", row=1, col=1)
+                fig.update_yaxes(title_text="Value", row=1, col=2)
                 
                 fig.update_layout(
-                    title="Control Outputs",
-                    xaxis_title="Time (s)",
-                    yaxis_title="Control Value",
+                    title=dict(text="Control Outputs", x=0.5, xanchor='center'),
                     height=500,
-                    template="plotly_dark"
+                    template="plotly_dark",
+                    showlegend=False
                 )
+                
                 return fig
                 
             except Exception as e:
@@ -1830,7 +1975,7 @@ if HAS_DASH:
             """Create an empty plot with message"""
             fig = go.Figure()
             fig.update_layout(
-                title=title,
+                title=dict(text=title, x=0.5, xanchor='center'),
                 xaxis={'visible': False},
                 yaxis={'visible': False},
                 annotations=[dict(
@@ -1841,7 +1986,8 @@ if HAS_DASH:
                     font=dict(size=16, color='gray')
                 )],
                 height=500,
-                template="plotly_dark"
+                template="plotly_dark",
+                margin=dict(l=20, r=20, t=60, b=20)
             )
             return fig
         
@@ -1850,13 +1996,13 @@ if HAS_DASH:
             logger.info(f"🚀 Starting UAV Dashboard on http://localhost:{port}")
             self.app.run(debug=debug, port=port, host='0.0.0.0')
 # ============================================================================
-# PART 7: SIMULATION MANAGER AND INTEGRATION
+# PART 7: SIMULATION MANAGER - FIXED DATA FLOW
 # ============================================================================
 
 class SimulationManager:
     """
     Manages the complete simulation with multiple UAVs,
-    environment, and visualization
+    environment, and visualization - FIXED: Better data flow
     """
     
     def __init__(self):
@@ -1873,6 +2019,30 @@ class SimulationManager:
         
         # Performance monitoring
         self.update_times = deque(maxlen=100)
+        
+        # FIXED: Add proper mission initialization
+        self._initialize_mission()
+    
+    def _initialize_mission(self):
+        """Initialize with a realistic 3D mission"""
+        # Create an interesting 3D trajectory (helix pattern)
+        waypoints = []
+        radius = 15
+        height_step = 2
+        num_points = 20
+        
+        for i in range(num_points):
+            angle = 2 * np.pi * i / num_points
+            x = radius * np.cos(angle)
+            y = radius * np.sin(angle) 
+            z = -10 - (i * height_step)
+            waypoints.append(np.array([x, y, z]))
+        
+        # Return to start
+        waypoints.append(np.array([0, 0, -10]))
+        
+        self.flight_controller.set_waypoints(waypoints)
+        self.flight_controller.set_flight_mode(FlightMode.AUTO)
         
     def start_simulation(self):
         """Start the simulation in a separate thread"""
@@ -2075,18 +2245,6 @@ def main():
     # Add fault detection
     fault_detector = FaultDetectionAndRecovery(sim_manager.flight_controller)
     
-    # Create a realistic 3D trajectory (box pattern)
-    waypoints = [
-        np.array([0, 0, -10]),    # Start
-        np.array([20, 0, -15]),   # Forward
-        np.array([20, 20, -20]),  # Right and up
-        np.array([0, 20, -15]),   # Back
-        np.array([0, 0, -10]),    # Return to start
-    ]
-    
-    sim_manager.flight_controller.set_waypoints(waypoints)
-    sim_manager.flight_controller.set_flight_mode(FlightMode.AUTO)
-    
     # Run with dashboard if available, otherwise run headless
     if HAS_DASH:
         try:
@@ -2158,16 +2316,6 @@ if __name__ == "__main__":
             
             # Add fault detection
             fault_detector = FaultDetectionAndRecovery(sim_manager.flight_controller)
-            
-            # Example waypoint mission
-            waypoints = [
-                np.array([10, 0, -10]),
-                np.array([10, 10, -15]),
-                np.array([0, 10, -20]),
-                np.array([0, 0, -10])
-            ]
-            sim_manager.flight_controller.set_waypoints(waypoints)
-            sim_manager.flight_controller.set_flight_mode(FlightMode.AUTO)
             
             sim_manager.run_headless()
         else:
