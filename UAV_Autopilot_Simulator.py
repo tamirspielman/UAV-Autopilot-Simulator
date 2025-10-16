@@ -4,13 +4,6 @@ Advanced AI-Based UAV Autopilot Simulator
 A comprehensive flight control system combining classical control theory,
 sensor fusion, and reinforcement learning for autonomous UAV operation.
 
-Author: Advanced Autopilot System
-Python 3.8+ Required
-
-Dependencies:
-pip install numpy scipy matplotlib pandas gymnasium stable-baselines3 filterpy pygame plotly dash dash-bootstrap-components
-"""
-
 import numpy as np
 from scipy import signal, linalg
 from dataclasses import dataclass, field
