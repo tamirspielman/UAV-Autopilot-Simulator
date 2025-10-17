@@ -1280,7 +1280,6 @@ if HAS_DASH:
         
         def setup_layout(self):
             """Setup the modern minimalistic layout"""
-            
             # Custom CSS for clean, modern styling
             styles = {
                 'container': {
