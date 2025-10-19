@@ -77,12 +77,7 @@ class SensorModel:
                 np.random.randn(3) * self.gps_velocity_noise
             )
         
-        # Barometer
-        sensor_data.barometer_altitude = (
-            -true_state.position[2] +  # Convert from NED to altitude
-            np.random.randn() * self.baro_noise
-        )
-        
+        sensor_data.barometer_altitude = true_state.position[2] + np.random.randn() * self.baro_noise
         # Magnetometer (simplified - measures heading)
         mag_heading = true_state.orientation[2]  # yaw
         sensor_data.magnetometer = np.array([

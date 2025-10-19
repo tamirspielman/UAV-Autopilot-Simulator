@@ -141,7 +141,7 @@ class UAVEnvironment:
         self.current_step = 0
         
         # Target position for training
-        self.target_position = np.array([0, 0, -10])  # 10m altitude
+        self.target_position = np.array([0, 0, 10])  # 10m altitude
         
         # Track previous action for smoothness penalty
         self.prev_action = None
@@ -151,7 +151,7 @@ class UAVEnvironment:
     def reset(self):
         """Reset environment to initial state"""
         self.state = UAVState()
-        self.state.position = np.array([0, 0, -1])  # Start 1m above ground
+        self.state.position = np.array([0, 0, 1])  # Start 1m above ground
         self.current_step = 0
         self.prev_action = None
         return self._get_observation()
@@ -228,7 +228,7 @@ class UAVEnvironment:
     def _is_done(self) -> bool:
         """Check if episode should terminate"""
         # Check if crashed (too low altitude)
-        if self.state.position[2] > -0.1:  # Too close to ground
+        if self.state.position[2] < 0.1:  # Too close to ground
             return True
             
         # Check if too far from target

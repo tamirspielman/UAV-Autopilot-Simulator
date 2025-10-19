@@ -49,7 +49,7 @@ class FlightController:
         # Flight mode and setpoints
         self.flight_mode = FlightMode.STABILIZE
         self.setpoints = {
-            'altitude': -10.0,
+            'altitude': 10.0,
             'position': np.array([0, 0, 10]),
             'velocity': np.zeros(3),
             'attitude': np.zeros(3)
