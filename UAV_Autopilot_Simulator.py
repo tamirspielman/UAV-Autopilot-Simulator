@@ -18,6 +18,9 @@ import json
 import logging
 from abc import ABC, abstractmethod
 import os
+import csv
+import pandas as pd
+from datetime import datetime
 
 # For RL components - using Gymnasium instead of Gym
 try:
@@ -693,6 +696,8 @@ class ModelPredictiveController:
             return np.clip(control, self.u_min, self.u_max)
         
         return np.array([0.5, 0, 0, 0])  # Hover
+
+
 # ============================================================================
 # PART 4: REINFORCEMENT LEARNING AUTOPILOT - FIXED VERSION
 # ============================================================================
@@ -935,18 +940,285 @@ class RLAutopilot:
             self.policy = PPONetwork(obs_dim=15, action_dim=4)  # Fixed dimensions
             self.policy.load_state_dict(torch.load(path))
             self.policy.eval()
+
+# ============================================================================
+# PART 10: DATA LOGGING AND ANALYSIS - MOVED BEFORE FLIGHT CONTROLLER
+# ============================================================================
+class DataLogger:
+    """
+    Comprehensive data logging system for UAV telemetry and analysis
+    Logs all flight data to CSV for post-flight analysis and debugging
+    """
+    
+    def __init__(self, log_directory: str = "flight_logs"):
+        self.log_directory = log_directory
+        self.current_log_file = None
+        self.csv_writer = None
+        self.csv_file = None
+        
+        # Create log directory if it doesn't exist
+        os.makedirs(self.log_directory, exist_ok=True)
+        
+        # Field names for CSV logging
+        self.fieldnames = [
+            'timestamp', 'simulation_time',
+            'position_x', 'position_y', 'position_z',
+            'velocity_x', 'velocity_y', 'velocity_z',
+            'attitude_roll', 'attitude_pitch', 'attitude_yaw',
+            'angular_velocity_x', 'angular_velocity_y', 'angular_velocity_z',
+            'acceleration_x', 'acceleration_y', 'acceleration_z',
+            'motor_speed_1', 'motor_speed_2', 'motor_speed_3', 'motor_speed_4',
+            'control_throttle', 'control_roll', 'control_pitch', 'control_yaw',
+            'estimated_position_x', 'estimated_position_y', 'estimated_position_z',
+            'estimated_velocity_x', 'estimated_velocity_y', 'estimated_velocity_z',
+            'estimated_attitude_roll', 'estimated_attitude_pitch', 'estimated_attitude_yaw',
+            'sensor_accel_x', 'sensor_accel_y', 'sensor_accel_z',
+            'sensor_gyro_x', 'sensor_gyro_y', 'sensor_gyro_z',
+            'sensor_gps_x', 'sensor_gps_y', 'sensor_gps_z',
+            'sensor_gps_vx', 'sensor_gps_vy', 'sensor_gps_vz',
+            'sensor_baro_altitude', 'sensor_mag_x', 'sensor_mag_y', 'sensor_mag_z',
+            'flight_mode', 'battery_level', 'gps_fix',
+            'waypoint_index', 'mission_complete',
+            'setpoint_altitude', 'setpoint_position_x', 'setpoint_position_y', 'setpoint_position_z',
+            'position_error', 'attitude_error'
+        ]
+        
+        self.start_time = time.time()
+        self.logging_enabled = True
+        
+    def start_new_log(self):
+        """Start a new log file with timestamp"""
+        if not self.logging_enabled:
+            return
+            
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.current_log_file = os.path.join(self.log_directory, f"flight_log_{timestamp}.csv")
+        
+        try:
+            self.csv_file = open(self.current_log_file, 'w', newline='')
+            self.csv_writer = csv.DictWriter(self.csv_file, fieldnames=self.fieldnames)
+            self.csv_writer.writeheader()
+            logger.info(f"Started new flight log: {self.current_log_file}")
+        except Exception as e:
+            logger.error(f"Failed to create log file: {e}")
+            self.logging_enabled = False
+    
+    def log_data(self, flight_controller: 'FlightController'):
+        """
+        Log comprehensive flight data to CSV.
+        Robust against missing keys, NaNs, and orientation wrap-around.
+        """
+        if not self.logging_enabled or self.csv_writer is None or self.csv_file is None:
+            return
+
+        try:
+            current_time = time.time()
+            simulation_time = current_time - self.start_time
+
+            # Safe setpoint extraction
+            position_sp = flight_controller.setpoints.get('position', flight_controller.state.position)
+            attitude_sp = flight_controller.setpoints.get('attitude', np.zeros(3))
+
+            # Position error (Euclidean)
+            position_error = float(np.linalg.norm(flight_controller.estimated_state.position - position_sp))
+
+            # Attitude error (normalize angles to [-pi, pi])
+            try:
+                attitude_diff = UAVDynamics._normalize_angles(
+                    flight_controller.estimated_state.orientation - attitude_sp
+                )
+                attitude_error = float(np.linalg.norm(attitude_diff))
+            except Exception:
+                attitude_error = 0.0
+
+            # Build row
+            row = {
+                'timestamp': current_time,
+                'simulation_time': simulation_time,
+
+                # True state
+                'position_x': flight_controller.state.position[0],
+                'position_y': flight_controller.state.position[1],
+                'position_z': flight_controller.state.position[2],
+                'velocity_x': flight_controller.state.velocity[0],
+                'velocity_y': flight_controller.state.velocity[1],
+                'velocity_z': flight_controller.state.velocity[2],
+                'attitude_roll': flight_controller.state.orientation[0],
+                'attitude_pitch': flight_controller.state.orientation[1],
+                'attitude_yaw': flight_controller.state.orientation[2],
+
+                # Estimated state
+                'estimated_position_x': flight_controller.estimated_state.position[0],
+                'estimated_position_y': flight_controller.estimated_state.position[1],
+                'estimated_position_z': flight_controller.estimated_state.position[2],
+                'estimated_velocity_x': flight_controller.estimated_state.velocity[0],
+                'estimated_velocity_y': flight_controller.estimated_state.velocity[1],
+                'estimated_velocity_z': flight_controller.estimated_state.velocity[2],
+                'estimated_attitude_roll': flight_controller.estimated_state.orientation[0],
+                'estimated_attitude_pitch': flight_controller.estimated_state.orientation[1],
+                'estimated_attitude_yaw': flight_controller.estimated_state.orientation[2],
+
+                # Control outputs
+                'control_throttle': flight_controller.control_output[0] if hasattr(flight_controller, 'control_output') else 0.0,
+                'control_roll': flight_controller.control_output[1] if hasattr(flight_controller, 'control_output') else 0.0,
+                'control_pitch': flight_controller.control_output[2] if hasattr(flight_controller, 'control_output') else 0.0,
+                'control_yaw': flight_controller.control_output[3] if hasattr(flight_controller, 'control_output') else 0.0,
+
+                # System state
+                'flight_mode': flight_controller.flight_mode.value,
+                'battery_level': 85.0,
+                'gps_fix': True,
+                'waypoint_index': flight_controller.current_waypoint_index,
+                'mission_complete': flight_controller.mission_complete,
+
+                # Setpoints
+                'setpoint_altitude': flight_controller.setpoints.get('altitude', 0.0),
+                'setpoint_position_x': float(position_sp[0]),
+                'setpoint_position_y': float(position_sp[1]),
+                'setpoint_position_z': float(position_sp[2]),
+
+                # Errors
+                'position_error': position_error,
+                'attitude_error': attitude_error
+            }
+
+            self.csv_writer.writerow(row)
+            self.csv_file.flush()
+
+        except Exception as e:
+            logger.error(f"Error writing to log file: {e}")
+        
+    def stop_logging(self):
+        """Stop logging and close the file"""
+        if self.csv_file:
+            self.csv_file.close()
+            self.csv_file = None
+            self.csv_writer = None
+            logger.info(f"Closed flight log: {self.current_log_file}")
+    
+    def analyze_log(self, log_file_path: str) -> dict:
+        """
+        Analyze a flight log CSV file and compute performance statistics.
+        Handles missing data and NaN values gracefully.
+        """
+        try:
+            df = pd.read_csv(log_file_path)
+        except Exception as e:
+            logger.error(f"Failed to read log file: {e}")
+            return {}
+
+        if df.empty:
+            return {}
+
+        # Attitude stats with NaN guards
+        if 'attitude_error' in df.columns and not df['attitude_error'].dropna().empty:
+            max_att_rad = float(df['attitude_error'].dropna().max())
+            avg_att_rad = float(df['attitude_error'].dropna().mean())
+        else:
+            max_att_rad = avg_att_rad = 0.0
+
+        analysis = {
+            'file_path': log_file_path,
+            'duration_seconds': float(df['simulation_time'].max()) if 'simulation_time' in df.columns else 0.0,
+            'total_samples': len(df),
+            'average_update_rate': (
+                (len(df) / df['simulation_time'].max())
+                if ('simulation_time' in df.columns and df['simulation_time'].max() > 0)
+                else 0.0
+            ),
+
+            # Position statistics
+            'max_position_error': float(df['position_error'].max()) if 'position_error' in df.columns else 0.0,
+            'avg_position_error': float(df['position_error'].mean()) if 'position_error' in df.columns else 0.0,
+            'final_position_error': float(df['position_error'].iloc[-1]) if ('position_error' in df.columns and len(df) > 0) else 0.0,
+
+            # Attitude statistics (radians → degrees)
+            'max_attitude_error_deg': float(np.degrees(max_att_rad)),
+            'avg_attitude_error_deg': float(np.degrees(avg_att_rad)),
+
+            # Control performance
+            'max_throttle': float(df['control_throttle'].max()) if 'control_throttle' in df.columns else 0.0,
+            'min_throttle': float(df['control_throttle'].min()) if 'control_throttle' in df.columns else 0.0,
+            'max_roll_command': float(df['control_roll'].max()) if 'control_roll' in df.columns else 0.0,
+            'max_pitch_command': float(df['control_pitch'].max()) if 'control_pitch' in df.columns else 0.0,
+
+            # Mission completion
+            'mission_completed': bool(df['mission_complete'].iloc[-1]) if ('mission_complete' in df.columns and len(df) > 0) else False,
+            'waypoints_reached': int(df['waypoint_index'].max()) if ('waypoint_index' in df.columns and len(df) > 0) else 0
+        }
+
+        return analysis
+    
+    def generate_report(self, log_file_path: Optional[str] = None) -> str:
+        """Generate a comprehensive flight report"""
+        if log_file_path is None:
+            return "No log file specified"
+            
+        analysis = self.analyze_log(log_file_path)
+        if not analysis:
+            return "No data available for report"
+            
+        report = f"""
+FLIGHT ANALYSIS REPORT
+======================
+File: {analysis['file_path']}
+Duration: {analysis['duration_seconds']:.1f} seconds
+Samples: {analysis['total_samples']}
+Update Rate: {analysis['average_update_rate']:.1f} Hz
+
+POSITION PERFORMANCE
+--------------------
+Maximum Position Error: {analysis['max_position_error']:.2f} m
+Average Position Error: {analysis['avg_position_error']:.2f} m
+Final Position Error: {analysis['final_position_error']:.2f} m
+
+ATTITUDE PERFORMANCE
+--------------------
+Maximum Attitude Error: {analysis['max_attitude_error_deg']:.1f}°
+Average Attitude Error: {analysis['avg_attitude_error_deg']:.1f}°
+
+CONTROL PERFORMANCE
+-------------------
+Throttle Range: {analysis['min_throttle']:.2f} - {analysis['max_throttle']:.2f}
+Max Roll Command: {analysis['max_roll_command']:.2f}
+Max Pitch Command: {analysis['max_pitch_command']:.2f}
+
+MISSION STATUS
+--------------
+Mission Completed: {'Yes' if analysis['mission_completed'] else 'No'}
+Waypoints Reached: {analysis['waypoints_reached']}
+"""
+        return report
+
+    def get_recent_logs(self, count: int = 5):
+        """Get list of recent log files"""
+        try:
+            log_files = []
+            for file in os.listdir(self.log_directory):
+                if file.startswith("flight_log_") and file.endswith(".csv"):
+                    file_path = os.path.join(self.log_directory, file)
+                    mod_time = os.path.getmtime(file_path)
+                    log_files.append((file_path, mod_time))
+            
+            # Sort by modification time (newest first)
+            log_files.sort(key=lambda x: x[1], reverse=True)
+            return [file[0] for file in log_files[:count]]
+            
+        except Exception as e:
+            logger.error(f"Error getting recent logs: {e}")
+            return []
+
 # ============================================================================
 # PART 5: FLIGHT CONTROLLER - FIXED WITH MISSING ATTRIBUTE
 # ============================================================================
 
 class FlightController:
     """
-    Main flight controller that combines all control methods
-    and manages flight modes
+    Main flight controller with integrated data logging
     """
     
     def __init__(self):
-        # Initialize components
+        # Initialize components (existing code)
         self.dynamics = UAVDynamics()
         self.sensor_model = SensorModel()
         self.ekf = ExtendedKalmanFilter()
@@ -968,7 +1240,7 @@ class FlightController:
         # Flight mode and setpoints
         self.flight_mode = FlightMode.STABILIZE
         self.setpoints = {
-            'altitude': -10.0,  # 10m altitude (NED coordinates)
+            'altitude': -10.0,
             'position': np.array([0, 0, -10]),
             'velocity': np.zeros(3),
             'attitude': np.zeros(3)
@@ -980,21 +1252,27 @@ class FlightController:
         self.mission_complete = False
         
         # Control outputs
-        self.control_output = np.array([0.5, 0, 0, 0])  # hover
+        self.control_output = np.array([0.5, 0, 0, 0])
         
         # Timing
         self.dt = 0.01
         self.last_update = time.time()
+        self.last_log_time = time.time()
+        self.log_interval = 0.1  # Log every 0.1 seconds (10 Hz)
         
         # Data logging
         self.telemetry_history = deque(maxlen=1000)
         self.control_history = deque(maxlen=1000)
         
         # FIXED: Add missing waypoint acceptance radius
-        self.waypoint_acceptance_radius = 2.0  # meters
+        self.waypoint_acceptance_radius = 2.0
+        
+        # Data logger
+        self.data_logger = DataLogger()
+        self.data_logger.start_new_log()
         
     def update(self, manual_control: Optional[np.ndarray] = None) -> UAVState:
-        """Main update loop - runs at fixed timestep"""
+        """Main update loop with data logging"""
         current_time = time.time()
         dt = current_time - self.last_update
         
@@ -1026,6 +1304,11 @@ class FlightController:
             
             # Log telemetry
             self._log_telemetry()
+            
+            # Data logging (at reduced rate to avoid excessive file I/O)
+            if current_time - self.last_log_time >= self.log_interval:
+                self.data_logger.log_data(self)
+                self.last_log_time = current_time
             
             self.last_update = current_time
         
@@ -1098,54 +1381,54 @@ class FlightController:
         return np.array([throttle, roll, pitch, yaw])
     
     def _compute_auto_control(self) -> np.ndarray:
-        """Auto mode - follow waypoints with improved trajectory tracking"""
+        """
+        Autonomous mission following control.
+        Robust to waypoint list size, index limits, and mission completion.
+        """
         if not self.waypoints:
             return self._compute_position_hold_control()
-        
-        current_wp = self.waypoints[self.current_waypoint_index]
-        
-        # Calculate desired velocity vector towards waypoint
-        pos_error = current_wp - self.estimated_state.position
-        horizontal_error = np.linalg.norm(pos_error[:2])
-        
-        # Normalize and scale desired velocity
-        if horizontal_error > 0.1:
-            desired_velocity_xy = (pos_error[:2] / horizontal_error) * min(horizontal_error * 0.8, 3.0)
-        else:
-            desired_velocity_xy = np.zeros(2)
-        
+
+        # Clamp waypoint index
+        idx = max(0, min(self.current_waypoint_index, len(self.waypoints) - 1))
+        current_wp = np.array(self.waypoints[idx], dtype=float)
+
+        # Set active setpoint for logger
+        self.setpoints['position'] = current_wp
+
+        # Position control
+        pos_err_xy = current_wp[:2] - self.estimated_state.position[:2]
+        dist_xy = np.linalg.norm(pos_err_xy)
+        desired_velocity_xy = np.clip(pos_err_xy * 0.3, -2.0, 2.0) if dist_xy > 0.1 else np.zeros(2)
+
         # Altitude control
         altitude_error = current_wp[2] - self.estimated_state.position[2]
         desired_velocity_z = np.clip(altitude_error * 0.5, -1.0, 1.0)
-        
         desired_velocity = np.array([desired_velocity_xy[0], desired_velocity_xy[1], desired_velocity_z])
-        
-        # Convert to attitude commands
+
+        # Convert desired velocities → attitude setpoints
         desired_pitch = np.clip(desired_velocity[0] * 0.3, -0.4, 0.4)
         desired_roll = np.clip(-desired_velocity[1] * 0.3, -0.4, 0.4)
-        
-        # Altitude control
+
+        # Compute throttle & attitude commands
         throttle = self.altitude_pid.compute(current_wp[2], self.estimated_state.position[2], self.dt)
-        
-        # Attitude control
         roll = self.roll_pid.compute(desired_roll, self.estimated_state.orientation[0], self.dt)
         pitch = self.pitch_pid.compute(desired_pitch, self.estimated_state.orientation[1], self.dt)
-        yaw = self.yaw_pid.compute(0, self.estimated_state.orientation[2], self.dt)  # Maintain heading
-        
+        yaw = self.yaw_pid.compute(0.0, self.estimated_state.orientation[2], self.dt)
+
         control_output = np.array([throttle, roll, pitch, yaw])
-        
-        # Check if waypoint reached - FIXED: Now using the defined attribute
+
+        # Waypoint reached check
         distance = np.linalg.norm(self.estimated_state.position - current_wp)
-        if distance < self.waypoint_acceptance_radius:  # This should now work
-            self.current_waypoint_index += 1
-            if self.current_waypoint_index >= len(self.waypoints):
-                self.mission_complete = True
-                self.current_waypoint_index = len(self.waypoints) - 1
-                logger.info("Mission complete! All waypoints reached.")
+        if distance < getattr(self, 'waypoint_acceptance_radius', 2.0):
+            if self.current_waypoint_index < len(self.waypoints) - 1:
+                logger.info(f"Waypoint {self.current_waypoint_index} reached ({distance:.2f} m).")
+                self.current_waypoint_index += 1
             else:
-                logger.info(f"Waypoint {self.current_waypoint_index-1} reached. Moving to next waypoint.")
-        
+                logger.info("Final waypoint reached. Mission complete.")
+                self.mission_complete = True
+
         return control_output
+
     
     def _compute_rtl_control(self) -> np.ndarray:
         """Return to launch control"""
@@ -1233,6 +1516,19 @@ class FlightController:
             'waypoint_index': self.current_waypoint_index,
             'mission_complete': self.mission_complete
         }
+    
+    def stop_logging(self):
+        """Stop data logging"""
+        self.data_logger.stop_logging()
+    
+    def get_flight_report(self):
+        """Get a flight analysis report"""
+        return self.data_logger.generate_report()
+    
+    def get_recent_logs(self):
+        """Get list of recent flight logs"""
+        return self.data_logger.get_recent_logs()
+
 # ============================================================================
 # PART 6: MINIMALISTIC DASHBOARD - MODERN UI/UX
 # ============================================================================
@@ -1246,7 +1542,13 @@ if HAS_DASH:
         
         def __init__(self, flight_controller: FlightController):
             self.fc = flight_controller
-            self.app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG])
+            
+            # FIX: Check if dbc is available before using it
+            if HAS_DBC:
+                self.app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG])
+            else:
+                self.app = dash.Dash(__name__)
+                print("Using basic Dash components without Bootstrap styling")
                 
             self.setup_layout()
             self.setup_callbacks()
@@ -1394,280 +1696,320 @@ if HAS_DASH:
                 }
             }
             
-            self.app.layout = dbc.Container([
-                # Header
-                dbc.Row([
-                    dbc.Col([
-                        html.H1("UAV Autopilot", style=styles['header']),
-                        html.P("Advanced Flight Control System", style=styles['subheader'])
-                    ], width=12)
-                ], className='mb-4'),
-                
-                # Main Content
-                dbc.Row([
-                    # Left Column - Controls and Status
-                    dbc.Col([
-                        # Flight Controls Card
-                        dbc.Card([
-                            dbc.CardHeader("Flight Controls", style=styles['cardHeader']),
-                            dbc.CardBody([
-                                # Flight Mode Selection
-                                html.Div([
-                                    html.Label("Flight Mode", style={'color': '#8892b0', 'marginBottom': '8px', 'fontWeight': '500'}),
-                                    dcc.Dropdown(
-                                        id='flight-mode-dropdown',
-                                        options=[
-                                            {'label': 'Manual', 'value': 'manual'},
-                                            {'label': 'Stabilize', 'value': 'stabilize'},
-                                            {'label': 'Altitude Hold', 'value': 'altitude_hold'},
-                                            {'label': 'Position Hold', 'value': 'position_hold'},
-                                            {'label': 'Auto Mission', 'value': 'auto'},
-                                            {'label': 'Return to Launch', 'value': 'return_to_launch'},
-                                            {'label': 'Land', 'value': 'land'},
-                                            {'label': 'AI Pilot', 'value': 'ai_pilot'}
-                                        ],
-                                        value='stabilize',
-                                        style=styles['dropdown'],
-                                        clearable=False
-                                    )
-                                ], className='mb-3'),
-                                
-                                # Altitude Control
-                                html.Div([
-                                    html.Label("Target Altitude", style={'color': '#8892b0', 'marginBottom': '8px', 'fontWeight': '500'}),
-                                    dcc.Slider(
-                                        id='altitude-slider',
-                                        min=1, 
-                                        max=100, 
-                                        step=1, 
-                                        value=10,
-                                        marks={i: str(i) for i in range(0, 101, 25)},
-                                        tooltip={"placement": "bottom", "always_visible": True}
-                                    )
-                                ], className='mb-4'),
-                                
-                                # Quick Actions
-                                html.Div([
-                                    html.Label("Quick Actions", style={'color': '#8892b0', 'marginBottom': '12px', 'fontWeight': '500'}),
+            # FIX: Use basic Dash components if dbc is not available
+            if HAS_DBC:
+                self.app.layout = dbc.Container([
+                    # Header
+                    dbc.Row([
+                        dbc.Col([
+                            html.H1("UAV Autopilot", style=styles['header']),
+                            html.P("Advanced Flight Control System", style=styles['subheader'])
+                        ], width=12)
+                    ], className='mb-4'),
+                    
+                    # Main Content
+                    dbc.Row([
+                        # Left Column - Controls and Status
+                        dbc.Col([
+                            # Flight Controls Card
+                            dbc.Card([
+                                dbc.CardHeader("Flight Controls", style=styles['cardHeader']),
+                                dbc.CardBody([
+                                    # Flight Mode Selection
+                                    html.Div([
+                                        html.Label("Flight Mode", style={'color': '#8892b0', 'marginBottom': '8px', 'fontWeight': '500'}),
+                                        dcc.Dropdown(
+                                            id='flight-mode-dropdown',
+                                            options=[
+                                                {'label': 'Manual', 'value': 'manual'},
+                                                {'label': 'Stabilize', 'value': 'stabilize'},
+                                                {'label': 'Altitude Hold', 'value': 'altitude_hold'},
+                                                {'label': 'Position Hold', 'value': 'position_hold'},
+                                                {'label': 'Auto Mission', 'value': 'auto'},
+                                                {'label': 'Return to Launch', 'value': 'return_to_launch'},
+                                                {'label': 'Land', 'value': 'land'},
+                                                {'label': 'AI Pilot', 'value': 'ai_pilot'}
+                                            ],
+                                            value='stabilize',
+                                            style=styles['dropdown'],
+                                            clearable=False
+                                        )
+                                    ], className='mb-3'),
+                                    
+                                    # Altitude Control
+                                    html.Div([
+                                        html.Label("Target Altitude", style={'color': '#8892b0', 'marginBottom': '8px', 'fontWeight': '500'}),
+                                        dcc.Slider(
+                                            id='altitude-slider',
+                                            min=1, 
+                                            max=100, 
+                                            step=1, 
+                                            value=10,
+                                            marks={i: str(i) for i in range(0, 101, 25)},
+                                            tooltip={"placement": "bottom", "always_visible": True}
+                                        )
+                                    ], className='mb-4'),
+                                    
+                                    # Quick Actions
+                                    html.Div([
+                                        html.Label("Quick Actions", style={'color': '#8892b0', 'marginBottom': '12px', 'fontWeight': '500'}),
+                                        dbc.Row([
+                                            dbc.Col([
+                                                dbc.Button("Takeoff", id='takeoff-btn', color="success", className='w-100 mb-2')
+                                            ], width=6),
+                                            dbc.Col([
+                                                dbc.Button("Land", id='land-btn', color="warning", className='w-100 mb-2')
+                                            ], width=6)
+                                        ]),
+                                        dbc.Row([
+                                            dbc.Col([
+                                                dbc.Button("RTL", id='rtl-btn', color="danger", className='w-100 mb-2')
+                                            ], width=6),
+                                            dbc.Col([
+                                                dbc.Button("Pause", id='pause-btn', color="secondary", className='w-100 mb-2')
+                                            ], width=6)
+                                        ])
+                                    ])
+                                ])
+                            ], style=styles['card'], className='mb-3'),
+                            
+                            # System Status Card
+                            dbc.Card([
+                                dbc.CardHeader("System Status", style=styles['cardHeader']),
+                                dbc.CardBody([
                                     dbc.Row([
                                         dbc.Col([
-                                            dbc.Button("Takeoff", id='takeoff-btn', color="success", className='w-100 mb-2')
+                                            html.Div([
+                                                html.Div("UAV Status", style=styles['metricLabel']),
+                                                html.Div("🟢 ONLINE", id="uav-status", style=styles['metricValue'])
+                                            ])
                                         ], width=6),
                                         dbc.Col([
-                                            dbc.Button("Land", id='land-btn', color="warning", className='w-100 mb-2')
+                                            html.Div([
+                                                html.Div("GPS Fix", style=styles['metricLabel']),
+                                                html.Div("🟢 3D FIX", id="gps-status", style=styles['metricValue'])
+                                            ])
+                                        ], width=6)
+                                    ], className='mb-3'),
+                                    dbc.Row([
+                                        dbc.Col([
+                                            html.Div([
+                                                html.Div("Battery", style=styles['metricLabel']),
+                                                html.Div("🔋 85%", id="battery-status", style=styles['metricValue'])
+                                            ])
+                                        ], width=6),
+                                        dbc.Col([
+                                            html.Div([
+                                                html.Div("Sensors", style=styles['metricLabel']),
+                                                html.Div("🟢 OK", id="sensor-status", style=styles['metricValue'])
+                                            ])
+                                        ], width=6)
+                                    ])
+                                ])
+                            ], style=styles['card'], className='mb-3'),
+                            
+                            # Mission Planning Card
+                            dbc.Card([
+                                dbc.CardHeader("Mission Planning", style=styles['cardHeader']),
+                                dbc.CardBody([
+                                    html.Div([
+                                        html.Label("Waypoints", style={'color': '#8892b0', 'marginBottom': '8px', 'fontWeight': '500'}),
+                                        dcc.Textarea(
+                                            id='waypoint-input',
+                                            value='[[0, 0, -10], [15, 0, -15], [15, 15, -20], [0, 15, -15], [0, 0, -10]]',
+                                            style={
+                                                'width': '100%', 
+                                                'height': '100px', 
+                                                'fontFamily': 'monospace', 
+                                                'backgroundColor': '#2a2a2a', 
+                                                'color': '#ffffff', 
+                                                'border': '1px solid #3a3a3a',
+                                                'borderRadius': '6px',
+                                                'padding': '10px',
+                                                'fontSize': '0.9rem'
+                                            },
+                                            placeholder='Enter waypoints as JSON: [[x1,y1,z1],[x2,y2,z2],...]'
+                                        ),
+                                    ], className='mb-3'),
+                                    dbc.Row([
+                                        dbc.Col([
+                                            dbc.Button("Upload Mission", id='upload-mission-btn', color="primary", className='w-100')
+                                        ], width=6),
+                                        dbc.Col([
+                                            dbc.Button("Clear", id='clear-mission-btn', color="secondary", className='w-100')
                                         ], width=6)
                                     ]),
-                                    dbc.Row([
-                                        dbc.Col([
-                                            dbc.Button("RTL", id='rtl-btn', color="danger", className='w-100 mb-2')
-                                        ], width=6),
-                                        dbc.Col([
-                                            dbc.Button("Pause", id='pause-btn', color="secondary", className='w-100 mb-2')
-                                        ], width=6)
-                                    ])
+                                    html.Div(id='mission-status', className='mt-3')
                                 ])
-                            ])
-                        ], style=styles['card'], className='mb-3'),
+                            ], style=styles['card'])
+                        ], width=3),
                         
-                        # System Status Card
-                        dbc.Card([
-                            dbc.CardHeader("System Status", style=styles['cardHeader']),
-                            dbc.CardBody([
-                                dbc.Row([
-                                    dbc.Col([
-                                        html.Div([
-                                            html.Div("UAV Status", style=styles['metricLabel']),
-                                            html.Div("🟢 ONLINE", id="uav-status", style=styles['metricValue'])
-                                        ])
-                                    ], width=6),
-                                    dbc.Col([
-                                        html.Div([
-                                            html.Div("GPS Fix", style=styles['metricLabel']),
-                                            html.Div("🟢 3D FIX", id="gps-status", style=styles['metricValue'])
-                                        ])
-                                    ], width=6)
-                                ], className='mb-3'),
-                                dbc.Row([
-                                    dbc.Col([
-                                        html.Div([
-                                            html.Div("Battery", style=styles['metricLabel']),
-                                            html.Div("🔋 85%", id="battery-status", style=styles['metricValue'])
-                                        ])
-                                    ], width=6),
-                                    dbc.Col([
-                                        html.Div([
-                                            html.Div("Sensors", style=styles['metricLabel']),
-                                            html.Div("🟢 OK", id="sensor-status", style=styles['metricValue'])
-                                        ])
-                                    ], width=6)
-                                ])
-                            ])
-                        ], style=styles['card'], className='mb-3'),
-                        
-                        # Mission Planning Card
-                        dbc.Card([
-                            dbc.CardHeader("Mission Planning", style=styles['cardHeader']),
-                            dbc.CardBody([
-                                html.Div([
-                                    html.Label("Waypoints", style={'color': '#8892b0', 'marginBottom': '8px', 'fontWeight': '500'}),
-                                    dcc.Textarea(
-                                        id='waypoint-input',
-                                        value='[[0, 0, -10], [15, 0, -15], [15, 15, -20], [0, 15, -15], [0, 0, -10]]',
-                                        style={
-                                            'width': '100%', 
-                                            'height': '100px', 
-                                            'fontFamily': 'monospace', 
-                                            'backgroundColor': '#2a2a2a', 
-                                            'color': '#ffffff', 
-                                            'border': '1px solid #3a3a3a',
-                                            'borderRadius': '6px',
-                                            'padding': '10px',
-                                            'fontSize': '0.9rem'
-                                        },
-                                        placeholder='Enter waypoints as JSON: [[x1,y1,z1],[x2,y2,z2],...]'
+                        # Right Column - Visualizations
+                        dbc.Col([
+                            # Visualization Tabs
+                            dbc.Card([
+                                dbc.CardBody([
+                                    dcc.Tabs(
+                                        id="visualization-tabs", 
+                                        value='tab-3d', 
+                                        children=[
+                                            dcc.Tab(
+                                                label='3D Trajectory', 
+                                                value='tab-3d',
+                                                style={'backgroundColor': '#2a2a2a', 'color': '#8892b0', 'border': '1px solid #3a3a3a'},
+                                                selected_style={'backgroundColor': '#3a3a3a', 'color': '#ffffff', 'border': '1px solid #667eea'}
+                                            ),
+                                            dcc.Tab(
+                                                label='Position', 
+                                                value='tab-position',
+                                                style={'backgroundColor': '#2a2a2a', 'color': '#8892b0', 'border': '1px solid #3a3a3a'},
+                                                selected_style={'backgroundColor': '#3a3a3a', 'color': '#ffffff', 'border': '1px solid #667eea'}
+                                            ),
+                                            dcc.Tab(
+                                                label='Attitude', 
+                                                value='tab-attitude',
+                                                style={'backgroundColor': '#2a2a2a', 'color': '#8892b0', 'border': '1px solid #3a3a3a'},
+                                                selected_style={'backgroundColor': '#3a3a3a', 'color': '#ffffff', 'border': '1px solid #667eea'}
+                                            ),
+                                            dcc.Tab(
+                                                label='Controls', 
+                                                value='tab-controls',
+                                                style={'backgroundColor': '#2a2a2a', 'color': '#8892b0', 'border': '1px solid #3a3a3a'},
+                                                selected_style={'backgroundColor': '#3a3a3a', 'color': '#ffffff', 'border': '1px solid #667eea'}
+                                            ),
+                                        ],
+                                        style={'marginBottom': '15px'}
                                     ),
-                                ], className='mb-3'),
-                                dbc.Row([
-                                    dbc.Col([
-                                        dbc.Button("Upload Mission", id='upload-mission-btn', color="primary", className='w-100')
-                                    ], width=6),
-                                    dbc.Col([
-                                        dbc.Button("Clear", id='clear-mission-btn', color="secondary", className='w-100')
-                                    ], width=6)
-                                ]),
-                                html.Div(id='mission-status', className='mt-3')
-                            ])
-                        ], style=styles['card'])
-                    ], width=3),
-                    
-                    # Right Column - Visualizations
-                    dbc.Col([
-                        # Visualization Tabs
-                        dbc.Card([
-                            dbc.CardBody([
-                                dcc.Tabs(
-                                    id="visualization-tabs", 
-                                    value='tab-3d', 
-                                    children=[
-                                        dcc.Tab(
-                                            label='3D Trajectory', 
-                                            value='tab-3d',
-                                            style={'backgroundColor': '#2a2a2a', 'color': '#8892b0', 'border': '1px solid #3a3a3a'},
-                                            selected_style={'backgroundColor': '#3a3a3a', 'color': '#ffffff', 'border': '1px solid #667eea'}
-                                        ),
-                                        dcc.Tab(
-                                            label='Position', 
-                                            value='tab-position',
-                                            style={'backgroundColor': '#2a2a2a', 'color': '#8892b0', 'border': '1px solid #3a3a3a'},
-                                            selected_style={'backgroundColor': '#3a3a3a', 'color': '#ffffff', 'border': '1px solid #667eea'}
-                                        ),
-                                        dcc.Tab(
-                                            label='Attitude', 
-                                            value='tab-attitude',
-                                            style={'backgroundColor': '#2a2a2a', 'color': '#8892b0', 'border': '1px solid #3a3a3a'},
-                                            selected_style={'backgroundColor': '#3a3a3a', 'color': '#ffffff', 'border': '1px solid #667eea'}
-                                        ),
-                                        dcc.Tab(
-                                            label='Controls', 
-                                            value='tab-controls',
-                                            style={'backgroundColor': '#2a2a2a', 'color': '#8892b0', 'border': '1px solid #3a3a3a'},
-                                            selected_style={'backgroundColor': '#3a3a3a', 'color': '#ffffff', 'border': '1px solid #667eea'}
-                                        ),
-                                    ],
-                                    style={'marginBottom': '15px'}
-                                ),
-                                html.Div(id="visualization-content", style={'height': '500px'})
-                            ])
-                        ], style=styles['card'], className='mb-3'),
-                        
-                        # Telemetry and Performance
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardHeader("Telemetry", style=styles['cardHeader']),
-                                    dbc.CardBody([
-                                        html.Div(id='telemetry-display', style={'color': '#ffffff', 'fontFamily': 'monospace', 'fontSize': '0.9rem'})
-                                    ])
-                                ], style=styles['card'])
-                            ], width=8),
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardHeader("Performance", style=styles['cardHeader']),
-                                    dbc.CardBody([
-                                        html.Div([
-                                            html.Div("Update Rate", style=styles['metricLabel']),
-                                            html.Div("100 Hz", id="update-rate", style=styles['metricValue'])
-                                        ], className='mb-3'),
-                                        html.Div([
-                                            html.Div("CPU Usage", style=styles['metricLabel']),
-                                            html.Div("2.5%", id="cpu-usage", style=styles['metricValue'])
-                                        ], className='mb-3'),
-                                        html.Div([
-                                            html.Div("Memory", style=styles['metricLabel']),
-                                            html.Div("45 MB", id="memory-usage", style=styles['metricValue'])
-                                        ], className='mb-3'),
-                                        html.Div([
-                                            html.Div("Real-time", style=styles['metricLabel']),
-                                            html.Div("1.0x", id="rt-factor", style=styles['metricValue'])
+                                    html.Div(id="visualization-content", style={'height': '500px'})
+                                ])
+                            ], style=styles['card'], className='mb-3'),
+                            
+                            # Telemetry and Performance
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.Card([
+                                        dbc.CardHeader("Telemetry", style=styles['cardHeader']),
+                                        dbc.CardBody([
+                                            html.Div(id='telemetry-display', style={'color': '#ffffff', 'fontFamily': 'monospace', 'fontSize': '0.9rem'})
                                         ])
-                                    ])
-                                ], style=styles['card'])
-                            ], width=4)
-                        ])
-                    ], width=9)
-                ]),
-                
-                # Update Interval
-                dcc.Interval(
-                    id='update-interval',
-                    interval=200,  # Update every 200ms (5Hz)
-                    n_intervals=0
-                )
-                
-            ], fluid=True, style=styles['container'])
+                                    ], style=styles['card'])
+                                ], width=8),
+                                dbc.Col([
+                                    dbc.Card([
+                                        dbc.CardHeader("Performance", style=styles['cardHeader']),
+                                        dbc.CardBody([
+                                            html.Div([
+                                                html.Div("Update Rate", style=styles['metricLabel']),
+                                                html.Div("100 Hz", id="update-rate", style=styles['metricValue'])
+                                            ], className='mb-3'),
+                                            html.Div([
+                                                html.Div("CPU Usage", style=styles['metricLabel']),
+                                                html.Div("2.5%", id="cpu-usage", style=styles['metricValue'])
+                                            ], className='mb-3'),
+                                            html.Div([
+                                                html.Div("Memory", style=styles['metricLabel']),
+                                                html.Div("45 MB", id="memory-usage", style=styles['metricValue'])
+                                            ], className='mb-3'),
+                                            html.Div([
+                                                html.Div("Real-time", style=styles['metricLabel']),
+                                                html.Div("1.0x", id="rt-factor", style=styles['metricValue'])
+                                            ])
+                                        ])
+                                    ], style=styles['card'])
+                                ], width=4)
+                            ])
+                        ], width=9)
+                    ]),
+                    
+                    # Update Interval
+                    dcc.Interval(
+                        id='update-interval',
+                        interval=200,  # Update every 200ms (5Hz)
+                        n_intervals=0
+                    )
+                    
+                ], fluid=True, style=styles['container'])
+            else:
+                # Fallback layout without dbc components
+                self.app.layout = html.Div([
+                    html.H1("UAV Autopilot Dashboard", style=styles['header']),
+                    html.P("Advanced Flight Control System", style=styles['subheader']),
+                    html.Div([
+                        html.Div([
+                            html.H3("Flight Controls"),
+                            dcc.Dropdown(
+                                id='flight-mode-dropdown',
+                                options=[
+                                    {'label': 'Manual', 'value': 'manual'},
+                                    {'label': 'Stabilize', 'value': 'stabilize'},
+                                    {'label': 'Altitude Hold', 'value': 'altitude_hold'},
+                                    {'label': 'Position Hold', 'value': 'position_hold'},
+                                    {'label': 'Auto Mission', 'value': 'auto'},
+                                    {'label': 'Return to Launch', 'value': 'return_to_launch'},
+                                    {'label': 'Land', 'value': 'land'},
+                                    {'label': 'AI Pilot', 'value': 'ai_pilot'}
+                                ],
+                                value='stabilize',
+                                style=styles['dropdown']
+                            ),
+                            html.Br(),
+                            html.Label("Target Altitude"),
+                            dcc.Slider(
+                                id='altitude-slider',
+                                min=1, max=100, step=1, value=10,
+                                marks={i: str(i) for i in range(0, 101, 25)}
+                            ),
+                            html.Br(),
+                            html.Button("Takeoff", id='takeoff-btn', style=styles['button']),
+                            html.Button("Land", id='land-btn', style=styles['button']),
+                            html.Button("RTL", id='rtl-btn', style=styles['button']),
+                        ], style={**styles['card'], 'width': '30%', 'float': 'left'}),
+                        
+                        html.Div([
+                            dcc.Tabs(
+                                id="visualization-tabs", 
+                                value='tab-3d', 
+                                children=[
+                                    dcc.Tab(label='3D Trajectory', value='tab-3d'),
+                                    dcc.Tab(label='Position', value='tab-position'),
+                                    dcc.Tab(label='Attitude', value='tab-attitude'),
+                                    dcc.Tab(label='Controls', value='tab-controls'),
+                                ]
+                            ),
+                            html.Div(id="visualization-content", style={'height': '500px'})
+                        ], style={**styles['card'], 'width': '68%', 'float': 'right'}),
+                        
+                        html.Div(style={'clear': 'both'})
+                    ]),
+                    
+                    dcc.Interval(
+                        id='update-interval',
+                        interval=200,
+                        n_intervals=0
+                    )
+                ], style=styles['container'])
         
         def setup_callbacks(self):
-            """Setup all dashboard callbacks"""
-            
-            # Visualization tab content
+            """Register all Dash callbacks cleanly — no duplicates."""
+
+            # Visualization content
             @self.app.callback(
                 Output('visualization-content', 'children'),
                 [Input('visualization-tabs', 'value'),
-                 Input('update-interval', 'n_intervals')]
+                Input('update-interval', 'n_intervals')]
             )
             def update_visualization(active_tab, n):
                 if active_tab == "tab-3d":
-                    return dcc.Graph(
-                        id='3d-plot',
-                        figure=self._create_3d_trajectory(),
-                        config={
-                            'displayModeBar': True, 
-                            'scrollZoom': True,
-                            'displaylogo': False,
-                            'modeBarButtonsToRemove': ['pan2d', 'lasso2d', 'select2d']
-                        }
-                    )
+                    return dcc.Graph(id='3d-plot', figure=self._create_3d_trajectory(), config={'displayModeBar': True})
                 elif active_tab == "tab-position":
-                    return dcc.Graph(
-                        id='position-plot',
-                        figure=self._create_position_plot(),
-                        config={'displayModeBar': True, 'displaylogo': False}
-                    )
+                    return dcc.Graph(id='position-plot', figure=self._create_position_plot(), config={'displayModeBar': True})
                 elif active_tab == "tab-attitude":
-                    return dcc.Graph(
-                        id='attitude-plot', 
-                        figure=self._create_attitude_plot(),
-                        config={'displayModeBar': True, 'displaylogo': False}
-                    )
+                    return dcc.Graph(id='attitude-plot', figure=self._create_attitude_plot(), config={'displayModeBar': True})
                 elif active_tab == "tab-controls":
-                    return dcc.Graph(
-                        id='control-plot',
-                        figure=self._create_control_plot(),
-                        config={'displayModeBar': True, 'displaylogo': False}
-                    )
-                return html.Div("Select a visualization tab")
-            
-            # Update all dynamic content
+                    return dcc.Graph(id='control-plot', figure=self._create_control_plot(), config={'displayModeBar': True})
+                return html.Div("Unknown tab")
+
+            # Dashboard telemetry + metrics
             @self.app.callback(
                 [Output('telemetry-display', 'children'),
                  Output('update-rate', 'children'),
@@ -1680,76 +2022,46 @@ if HAS_DASH:
                  Output('sensor-status', 'children')],
                 [Input('update-interval', 'n_intervals')]
             )
-            def update_all_content(n):
+            def update_dashboard(n):
                 try:
-                    # Get telemetry data
                     telemetry = self.fc.get_telemetry()
-                    current_time = time.time()
-                    
-                    # Update data buffers with REAL data from flight controller
-                    self.position_history.append({
-                        'time': current_time,
-                        'x': telemetry['position'][0],
-                        'y': telemetry['position'][1], 
-                        'z': telemetry['position'][2]
-                    })
-                    
-                    self.attitude_history.append({
-                        'time': current_time,
-                        'roll': telemetry['attitude'][0],
-                        'pitch': telemetry['attitude'][1],
-                        'yaw': telemetry['attitude'][2]
-                    })
-                    
-                    # Create minimal telemetry display
                     telemetry_display = html.Div([
-                        html.Div([
-                            html.Span("Position: ", style={'color': '#8892b0'}),
-                            html.Span(f"N{telemetry['position'][0]:.1f}, E{telemetry['position'][1]:.1f}, Alt{-telemetry['position'][2]:.1f}m", 
-                                     style={'color': '#ffffff'})
-                        ], className='mb-1'),
-                        html.Div([
-                            html.Span("Velocity: ", style={'color': '#8892b0'}),
-                            html.Span(f"{np.linalg.norm(telemetry['velocity']):.1f} m/s", 
-                                     style={'color': '#ffffff'})
-                        ], className='mb-1'),
-                        html.Div([
-                            html.Span("Attitude: ", style={'color': '#8892b0'}),
-                            html.Span(f"R{np.degrees(telemetry['attitude'][0]):.1f}°, P{np.degrees(telemetry['attitude'][1]):.1f}°, Y{np.degrees(telemetry['attitude'][2]):.1f}°", 
-                                     style={'color': '#ffffff'})
-                        ], className='mb-1'),
-                        html.Div([
-                            html.Span("Mode: ", style={'color': '#8892b0'}),
-                            html.Span(telemetry['flight_mode'].replace('_', ' ').title(), 
-                                     style={'color': '#667eea', 'fontWeight': '500'})
-                        ], className='mb-1'),
-                        html.Div([
-                            html.Span("Mission: ", style={'color': '#8892b0'}),
-                            html.Span(f"WP {telemetry['waypoint_index'] + 1}/{len(self.fc.waypoints) if self.fc.waypoints else 0}", 
-                                     style={'color': '#ffffff'})
-                        ])
+                        html.Div([html.Span("Position: ", style={'color': '#8892b0'}),
+                                  html.Span(f"N{telemetry['position'][0]:.1f}, E{telemetry['position'][1]:.1f}, Alt{-telemetry['position'][2]:.1f}m", style={'color': '#ffffff'})]),
+                        html.Div([html.Span("Velocity: ", style={'color': '#8892b0'}),
+                                  html.Span(f"{np.linalg.norm(telemetry['velocity']):.1f} m/s", style={'color': '#ffffff'})]),
+                        html.Div([html.Span("Attitude: ", style={'color': '#8892b0'}),
+                                  html.Span(f"R{np.degrees(telemetry['attitude'][0]):.1f}°, P{np.degrees(telemetry['attitude'][1]):.1f}°, Y{np.degrees(telemetry['attitude'][2]):.1f}°", style={'color': '#ffffff'})]),
+                        html.Div([html.Span("Mode: ", style={'color': '#8892b0'}),
+                                  html.Span(telemetry['flight_mode'].replace('_', ' ').title(), style={'color': '#667eea', 'fontWeight': '500'})]),
+                        html.Div([html.Span("Mission: ", style={'color': '#8892b0'}),
+                                  html.Span(f"WP {telemetry['waypoint_index'] + 1}/{len(self.fc.waypoints) if self.fc.waypoints else 0}", style={'color': '#ffffff'})]),
                     ])
-                    
-                    # Performance metrics (simulated)
+
                     update_rate = f"{(1/self.fc.dt):.0f} Hz"
                     cpu_usage = f"{2.5 + np.random.uniform(-0.5, 0.5):.1f}%"
                     memory_usage = f"{45 + np.random.uniform(-2, 2):.0f} MB"
-                    rt_factor = f"{0.98 + np.random.uniform(0, 0.04):.2f}x"
-                    
-                    # System status
+                    rt_factor = f"{self.fc.dt and (1.0 / self.fc.dt):.2f}x" if self.fc.dt else "N/A"
+
                     uav_status = "🟢 ONLINE"
-                    gps_status = "🟢 3D FIX" if telemetry['gps_fix'] else "🔴 NO FIX"
-                    battery_status = f"🔋 {telemetry['battery']}%"
+                    gps_status = "🟢 3D FIX" if telemetry.get('gps_fix', True) else "🔴 NO FIX"
+                    battery_status = f"🔋 {telemetry.get('battery', 0)}%"
                     sensor_status = "🟢 OK"
-                    
-                    return (telemetry_display, update_rate, cpu_usage, memory_usage, 
-                           rt_factor, uav_status, gps_status, battery_status, sensor_status)
-                    
+
+                    # Append history
+                    t = time.time()
+                    self.position_history.append({'time': t, 'x': telemetry['position'][0], 'y': telemetry['position'][1], 'z': telemetry['position'][2]})
+                    self.attitude_history.append({'time': t, 'roll': telemetry['attitude'][0], 'pitch': telemetry['attitude'][1], 'yaw': telemetry['attitude'][2]})
+                    self.control_history.append(self.fc.control_output.tolist() if hasattr(self.fc, 'control_output') else [0,0,0,0])
+
+                    return (telemetry_display, update_rate, cpu_usage, memory_usage, rt_factor,
+                            uav_status, gps_status, battery_status, sensor_status)
+
                 except Exception as e:
-                    logger.error(f"Error updating dashboard: {e}")
-                    error_msg = html.Div(f"Error: {str(e)}", style={'color': '#ef4444'})
-                    return (error_msg, "N/A", "N/A", "N/A", "N/A", "🔴 ERROR", "🔴 ERROR", "🔴 ERROR", "🔴 ERROR")
-            
+                    logger.error(f"Dashboard update error: {e}")
+                    err = html.Div(f"Error: {str(e)}", style={'color': '#ef4444'})
+                    return (err, "N/A", "N/A", "N/A", "N/A", "🔴 ERROR", "🔴 ERROR", "🔴 ERROR", "🔴 ERROR")
+
             # Mission control callbacks
             @self.app.callback(
                 Output('mission-status', 'children'),
@@ -1761,39 +2073,26 @@ if HAS_DASH:
                 ctx = dash.callback_context
                 if not ctx.triggered:
                     return ""
-                
                 button_id = ctx.triggered[0]['prop_id'].split('.')[0]
-                
                 try:
                     if button_id == 'upload-mission-btn' and waypoints_text:
                         waypoints = json.loads(waypoints_text)
-                        waypoints_np = [np.array(wp) for wp in waypoints]
+                        waypoints_np = [np.array(wp, dtype=float) for wp in waypoints]
                         self.fc.set_waypoints(waypoints_np)
-                        return dbc.Alert(
-                            f"Mission uploaded with {len(waypoints)} waypoints!", 
-                            color="success",
-                            className='mb-0'
-                        )
-                    
+                        return (dbc.Alert(f"Mission uploaded with {len(waypoints_np)} waypoints!", color="success", className='mb-0')
+                                if HAS_DBC else html.Div(f"Mission uploaded with {len(waypoints_np)} waypoints!", style={'color':'green'}))
                     elif button_id == 'clear-mission-btn':
                         self.fc.waypoints = []
                         self.fc.current_waypoint_index = 0
                         self.fc.mission_complete = False
-                        return dbc.Alert(
-                            "Mission cleared!", 
-                            color="info",
-                            className='mb-0'
-                        )
-                        
+                        return (dbc.Alert("Mission cleared!", color="info", className='mb-0')
+                                if HAS_DBC else html.Div("Mission cleared!", style={'color':'blue'}))
                 except Exception as e:
-                    return dbc.Alert(
-                        f"Error: {str(e)}", 
-                        color="danger",
-                        className='mb-0'
-                    )
-                
+                    logger.error(f"Mission control error: {e}")
+                    return (dbc.Alert(f"Error: {str(e)}", color="danger", className='mb-0')
+                            if HAS_DBC else html.Div(f"Error: {str(e)}", style={'color':'red'}))
                 return ""
-            
+
             # Flight mode and control buttons
             @self.app.callback(
                 Output('flight-mode-dropdown', 'value'),
@@ -2171,15 +2470,14 @@ if HAS_DASH:
             """Start the dashboard server"""
             logger.info(f"🚀 Starting Modern UAV Dashboard on http://localhost:{port}")
             self.app.run(debug=debug, port=port, host='0.0.0.0')
-            
+
 # ============================================================================
 # PART 7: SIMULATION MANAGER - FIXED DATA FLOW
 # ============================================================================
 
 class SimulationManager:
     """
-    Manages the complete simulation with multiple UAVs,
-    environment, and visualization - FIXED: Better data flow
+    Manages the complete simulation with data logging capabilities
     """
     
     def __init__(self):
@@ -2197,12 +2495,11 @@ class SimulationManager:
         # Performance monitoring
         self.update_times = deque(maxlen=100)
         
-        # FIXED: Add proper mission initialization
+        # Initialize mission
         self._initialize_mission()
     
     def _initialize_mission(self):
         """Initialize with a realistic 3D mission"""
-        # Create an interesting 3D trajectory (helix pattern)
         waypoints = []
         radius = 15
         height_step = 2
@@ -2220,11 +2517,10 @@ class SimulationManager:
         
         self.flight_controller.set_waypoints(waypoints)
         self.flight_controller.set_flight_mode(FlightMode.AUTO)
-        
+    
     def start_simulation(self):
-        """Start the simulation in a separate thread"""
+        """Start the simulation"""
         if self.running:
-            logger.warning("Simulation already running")
             return
             
         self.running = True
@@ -2232,14 +2528,7 @@ class SimulationManager:
         self.simulation_thread.daemon = True
         self.simulation_thread.start()
         logger.info("Simulation started")
-        
-    def stop_simulation(self):
-        """Stop the simulation"""
-        self.running = False
-        if self.simulation_thread:
-            self.simulation_thread.join(timeout=2.0)
-        logger.info("Simulation stopped")
-        
+    
     def _simulation_loop(self):
         """Main simulation loop"""
         last_time = time.time()
@@ -2261,6 +2550,24 @@ class SimulationManager:
             time.sleep(sleep_time)
             
             last_time = current_time
+    
+    def stop_simulation(self):
+        """Stop the simulation and data logging"""
+        self.running = False
+        if self.simulation_thread:
+            self.simulation_thread.join(timeout=2.0)
+        
+        # Stop data logging
+        self.flight_controller.stop_logging()
+        
+        # Generate final report
+        report = self.flight_controller.get_flight_report()
+        print("\n" + "="*50)
+        print("SIMULATION COMPLETE - FLIGHT REPORT")
+        print("="*50)
+        print(report)
+        
+        logger.info("Simulation stopped")
     
     def get_performance_stats(self) -> Dict:
         """Get simulation performance statistics"""
@@ -2320,6 +2627,23 @@ class SimulationManager:
             logger.info("Shutting down...")
         finally:
             self.stop_simulation()
+    
+    def export_log_data(self, output_file: str = "flight_analysis.csv"):
+        """Export current flight data to CSV for analysis"""
+        try:
+            recent_logs = self.flight_controller.get_recent_logs()
+            if recent_logs:
+                # Copy the most recent log to the specified location
+                import shutil
+                shutil.copy2(recent_logs[0], output_file)
+                logger.info(f"Flight data exported to: {output_file}")
+                return True
+            else:
+                logger.warning("No flight data available to export")
+                return False
+        except Exception as e:
+            logger.error(f"Error exporting flight data: {e}")
+            return False
 
 
 # ============================================================================
@@ -2475,29 +2799,41 @@ def train_rl_agent():
     rl_autopilot.save_model("uav_autopilot_ppo.pth")
     print("Training completed and model saved!")
 
+# ============================================================================
+# PART 11: COMMAND LINE INTERFACE
+# ============================================================================
+
 if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="AI-Based UAV Autopilot Simulator")
-    parser.add_argument("--mode", choices=["simulate", "train", "demo"], 
+    parser.add_argument("--mode", choices=["simulate", "train", "demo", "analyze"], 
                        default="simulate", help="Operation mode")
     parser.add_argument("--port", type=int, default=8050, help="Dashboard port")
     parser.add_argument("--headless", action="store_true", help="Run without dashboard")
+    parser.add_argument("--export-data", type=str, help="Export flight data to CSV file")
+    parser.add_argument("--analyze-log", type=str, help="Analyze a specific log file")
     
     args = parser.parse_args()
     
-    if args.mode == "simulate":
-        if args.headless or not HAS_DASH:
-            # Create simulation manager and run headless
-            sim_manager = SimulationManager()
-            
-            # Add fault detection
-            fault_detector = FaultDetectionAndRecovery(sim_manager.flight_controller)
-            
-            sim_manager.run_headless()
-        else:
-            main()
-    elif args.mode == "train":
-        train_rl_agent()
-    elif args.mode == "demo":
-        demo_control_modes()
+    if args.mode == "analyze" and args.analyze_log:
+        # Analyze a specific log file
+        data_logger = DataLogger()
+        report = data_logger.generate_report(args.analyze_log)
+        print(report)
+    elif args.export_data:
+        # Export data mode
+        sim_manager = SimulationManager()
+        sim_manager.export_log_data(args.export_data)
+    else:
+        # Normal simulation modes
+        if args.mode == "simulate":
+            if args.headless or not HAS_DASH:
+                sim_manager = SimulationManager()
+                sim_manager.run_headless()
+            else:
+                main()
+        elif args.mode == "train":
+            train_rl_agent()
+        elif args.mode == "demo":
+            demo_control_modes()
