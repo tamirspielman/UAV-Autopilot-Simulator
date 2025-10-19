@@ -13,7 +13,7 @@ def test_components():
         # Test basic imports
         from uav_simulator.dynamics import UAVState, UAVDynamics
         from uav_simulator.sensor_model import SensorModel
-        from uav_simulator.autopilot import PIDController
+        from uav_simulator.PIDController import PIDController
         from uav_simulator.utils import FlightMode
         
         print("✓ Basic imports successful")

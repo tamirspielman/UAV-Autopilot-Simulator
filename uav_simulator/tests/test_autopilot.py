@@ -9,7 +9,7 @@ import os
 # Add the parent directory to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from uav_simulator.autopilot import PIDController, UAVEnvironment
+from uav_simulator.PIDController import PIDController, UAVEnvironment
 from uav_simulator.utils import FlightMode
 
 class TestPIDController(unittest.TestCase):
