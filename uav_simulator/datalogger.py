@@ -5,15 +5,18 @@ import os
 import csv
 import time
 import json
-import numpy as np  # ADD THIS IMPORT
+import numpy as np
 import pandas as pd
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 from collections import deque
 
 from .utils import logger
 from .dynamics import UAVState
-from .flight_controller import FlightController
+
+# Use string type hint to avoid circular import
+if TYPE_CHECKING:
+    from .flight_controller import FlightController
 
 class DataLogger:
     """
@@ -74,7 +77,7 @@ class DataLogger:
             logger.error(f"Failed to create log file: {e}")
             self.logging_enabled = False
     
-    def log_data(self, flight_controller: FlightController):
+    def log_data(self, flight_controller: 'FlightController'):
         """
         Log comprehensive flight data to CSV.
         Robust against missing keys, NaNs, and orientation wrap-around.
@@ -262,7 +265,7 @@ Waypoints Reached: {analysis['waypoints_reached']}
 """
         return report
 
-    def get_recent_logs(self, count: int = 5):
+    def get_recent_logs(self, count: int = 5) -> List[str]:
         """Get list of recent log files"""
         try:
             log_files = []

@@ -137,7 +137,7 @@ class SimulationManager:
         """Set real-time simulation factor"""
         self.real_time_factor = max(0.1, min(10.0, factor))
     
-    def run_with_dashboard(self, dashboard_port: int = 8050):
+    def run_with_dashboard(self, port: int = 8050):
         """Run simulation with web dashboard"""
         if not HAS_DASH or self.dashboard is None:
             print("Dash not available. Cannot run dashboard.")
@@ -151,7 +151,7 @@ class SimulationManager:
         
         try:
             # Start dashboard
-            self.dashboard.run(port=dashboard_port)
+            self.dashboard.run(port=port)
         except KeyboardInterrupt:
             logger.info("Shutting down...")
         except Exception as e:
@@ -196,65 +196,302 @@ class SimulationManager:
             logger.error(f"Error exporting flight data: {e}")
             return False
 
+# Move the UAVDashboard class outside of SimulationManager class
 if HAS_DASH:
     class UAVDashboard:
         """
-        Modern minimalistic dashboard for real-time monitoring and control
-        Clean, professional design with better UX
+        Simplified UAV Dashboard - Working Version
         """
         
         def __init__(self, flight_controller: FlightController):
             self.fc = flight_controller
             
-            # FIX: Check if dbc is available before using it
+            # Create the app
             if HAS_DBC:
-                self.app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG])
+                self.app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
             else:
                 self.app = dash.Dash(__name__)
-                print("Using basic Dash components without Bootstrap styling")
-                
+            
+            # Set up the layout
             self.setup_layout()
+            
+            # Set up callbacks
             self.setup_callbacks()
             
-            # Data buffers for plotting
-            self.position_history = deque(maxlen=200)
-            self.attitude_history = deque(maxlen=200)
-            self.control_history = deque(maxlen=200)
+            # Data buffers
+            self.position_history = deque(maxlen=100)
+            self.attitude_history = deque(maxlen=100)
             self.start_time = time.time()
-            
-            # Initialize with some data to prevent empty plots
-            self._initialize_sample_data()
-            
-        def _initialize_sample_data(self):
-            """Initialize with sample data to prevent empty plots"""
-            current_time = time.time()
-            for i in range(10):
-                sample_time = current_time - (10 - i) * 0.1
-                self.position_history.append({
-                    'time': sample_time,
-                    'x': i * 0.5,
-                    'y': i * 0.3, 
-                    'z': -10 - i * 0.2
-                })
-                self.attitude_history.append({
-                    'time': sample_time,
-                    'roll': np.sin(i * 0.5) * 0.1,
-                    'pitch': np.cos(i * 0.3) * 0.08,
-                    'yaw': i * 0.02
-                })
         
         def setup_layout(self):
-            """Setup the modern minimalistic layout"""
-            # Layout implementation from original code
-            # (This would be the full dashboard layout code)
-            pass
-            
+            """Setup a simple but functional layout"""
+            if HAS_DBC:
+                self.app.layout = dbc.Container([
+                    dbc.Row([
+                        dbc.Col([
+                            html.H1("UAV Autopilot Simulator", 
+                                   style={'textAlign': 'center', 'color': 'white', 'marginBottom': '20px'})
+                        ], width=12)
+                    ]),
+                    
+                    dbc.Row([
+                        # Left column - Controls and Status
+                        dbc.Col([
+                            dbc.Card([
+                                dbc.CardHeader("Flight Controls"),
+                                dbc.CardBody([
+                                    html.Label("Flight Mode"),
+                                    dcc.Dropdown(
+                                        id='flight-mode-dropdown',
+                                        options=[
+                                            {'label': 'Manual', 'value': 'manual'},
+                                            {'label': 'Stabilize', 'value': 'stabilize'},
+                                            {'label': 'Altitude Hold', 'value': 'altitude_hold'},
+                                            {'label': 'Position Hold', 'value': 'position_hold'},
+                                            {'label': 'Auto', 'value': 'auto'},
+                                            {'label': 'Return to Launch', 'value': 'return_to_launch'},
+                                            {'label': 'Land', 'value': 'land'},
+                                            {'label': 'AI Pilot', 'value': 'ai_pilot'}
+                                        ],
+                                        value='auto'
+                                    ),
+                                    html.Br(),
+                                    html.Label("Target Altitude (m)"),
+                                    dcc.Slider(
+                                        id='altitude-slider',
+                                        min=1, max=100, step=1, value=10,
+                                        marks={i: str(i) for i in range(0, 101, 20)}
+                                    ),
+                                    html.Br(),
+                                    dbc.Button("Takeoff", id='takeoff-btn', color="success", className='w-100 mb-2'),
+                                    dbc.Button("Land", id='land-btn', color="warning", className='w-100 mb-2'),
+                                    dbc.Button("RTL", id='rtl-btn', color="danger", className='w-100')  # Fixed missing quote
+                                ])
+                            ], className='mb-3'),
+                            
+                            dbc.Card([
+                                dbc.CardHeader("System Status"),
+                                dbc.CardBody([
+                                    html.Div(id='status-display')
+                                ])
+                            ])
+                        ], width=4),
+                        
+                        # Right column - Visualizations
+                        dbc.Col([
+                            dbc.Card([
+                                dbc.CardHeader("Position Tracking"),
+                                dbc.CardBody([
+                                    dcc.Graph(id='position-plot')
+                                ])
+                            ], className='mb-3'),
+                            
+                            dbc.Card([
+                                dbc.CardHeader("Attitude"),
+                                dbc.CardBody([
+                                    dcc.Graph(id='attitude-plot')
+                                ])
+                            ])
+                        ], width=8)
+                    ]),
+                    
+                    # Update interval
+                    dcc.Interval(
+                        id='update-interval',
+                        interval=1000,  # Update every second
+                        n_intervals=0
+                    )
+                    
+                ], fluid=True, style={'backgroundColor': '#1e1e1e', 'minHeight': '100vh', 'padding': '20px'})
+            else:
+                # Fallback without Bootstrap
+                self.app.layout = html.Div([
+                    html.H1("UAV Autopilot Simulator", style={'textAlign': 'center', 'color': 'white'}),
+                    
+                    html.Div([
+                        html.Div([
+                            html.H3("Flight Controls"),
+                            dcc.Dropdown(
+                                id='flight-mode-dropdown',
+                                options=[
+                                    {'label': 'Manual', 'value': 'manual'},
+                                    {'label': 'Stabilize', 'value': 'stabilize'},
+                                    {'label': 'Altitude Hold', 'value': 'altitude_hold'},
+                                    {'label': 'Position Hold', 'value': 'position_hold'},
+                                    {'label': 'Auto', 'value': 'auto'},
+                                    {'label': 'Return to Launch', 'value': 'return_to_launch'},
+                                    {'label': 'Land', 'value': 'land'},
+                                    {'label': 'AI Pilot', 'value': 'ai_pilot'}
+                                ],
+                                value='auto'
+                            ),
+                            html.Br(),
+                            html.Label("Target Altitude"),
+                            dcc.Slider(id='altitude-slider', min=1, max=100, value=10),
+                            html.Br(),
+                            html.Button("Takeoff", id='takeoff-btn'),
+                            html.Button("Land", id='land-btn'),
+                            html.Button("RTL", id='rtl-btn')
+                        ], style={'width': '30%', 'float': 'left', 'padding': '10px'}),
+                        
+                        html.Div([
+                            dcc.Graph(id='position-plot'),
+                            dcc.Graph(id='attitude-plot')
+                        ], style={'width': '68%', 'float': 'right'})
+                    ]),
+                    
+                    html.Div(id='status-display', style={'clear': 'both', 'padding': '10px'}),
+                    
+                    dcc.Interval(
+                        id='update-interval',
+                        interval=1000,
+                        n_intervals=0
+                    )
+                    
+                ], style={'backgroundColor': '#1e1e1e', 'color': 'white', 'fontFamily': 'Arial'})
+        
         def setup_callbacks(self):
-            """Setup dashboard callbacks"""
-            # Callback implementation from original code
-            pass
+            """Setup the dashboard callbacks"""
             
+            @self.app.callback(
+                [Output('status-display', 'children'),
+                 Output('position-plot', 'figure'),
+                 Output('attitude-plot', 'figure')],
+                [Input('update-interval', 'n_intervals')]
+            )
+            def update_dashboard(n):
+                try:
+                    # Get telemetry data
+                    telemetry = self.fc.get_telemetry()
+                    
+                    # Update data buffers
+                    current_time = time.time()
+                    self.position_history.append({
+                        'time': current_time,
+                        'x': telemetry['position'][0],
+                        'y': telemetry['position'][1],
+                        'z': telemetry['position'][2]
+                    })
+                    self.attitude_history.append({
+                        'time': current_time,
+                        'roll': np.degrees(telemetry['attitude'][0]),
+                        'pitch': np.degrees(telemetry['attitude'][1]),
+                        'yaw': np.degrees(telemetry['attitude'][2])
+                    })
+                    
+                    # Create status display
+                    status_display = html.Div([
+                        html.H4("Current Status"),
+                        html.P(f"Position: N{telemetry['position'][0]:.1f}m, E{telemetry['position'][1]:.1f}m, Alt{-telemetry['position'][2]:.1f}m"),
+                        html.P(f"Velocity: {np.linalg.norm(telemetry['velocity']):.1f} m/s"),
+                        html.P(f"Attitude: Roll{np.degrees(telemetry['attitude'][0]):.1f}°, Pitch{np.degrees(telemetry['attitude'][1]):.1f}°, Yaw{np.degrees(telemetry['attitude'][2]):.1f}°"),
+                        html.P(f"Flight Mode: {telemetry['flight_mode']}"),
+                        html.P(f"Battery: {telemetry['battery']}%"),
+                        html.P(f"Waypoint: {telemetry['waypoint_index'] + 1}/{len(self.fc.waypoints) if self.fc.waypoints else 0}"),
+                        html.P(f"Mission Complete: {'Yes' if telemetry['mission_complete'] else 'No'}")
+                    ])
+                    
+                    # Create position plot
+                    if self.position_history:
+                        pos_df = list(self.position_history)
+                        times = [p['time'] - self.start_time for p in pos_df]
+                        
+                        pos_fig = {
+                            'data': [
+                                {'x': times, 'y': [p['x'] for p in pos_df], 'type': 'line', 'name': 'North', 'line': {'color': '#FF6B6B'}},
+                                {'x': times, 'y': [p['y'] for p in pos_df], 'type': 'line', 'name': 'East', 'line': {'color': '#4ECDC4'}},
+                                {'x': times, 'y': [-p['z'] for p in pos_df], 'type': 'line', 'name': 'Altitude', 'line': {'color': '#45B7D1'}}
+                            ],
+                            'layout': {
+                                'title': 'Position vs Time',
+                                'paper_bgcolor': 'rgba(0,0,0,0)',
+                                'plot_bgcolor': 'rgba(0,0,0,0)',
+                                'font': {'color': 'white'},
+                                'xaxis': {'title': 'Time (s)', 'color': 'white'},
+                                'yaxis': {'title': 'Position (m)', 'color': 'white'}
+                            }
+                        }
+                    else:
+                        pos_fig = {'data': [], 'layout': {'title': 'Position vs Time'}}
+                    
+                    # Create attitude plot
+                    if self.attitude_history:
+                        att_df = list(self.attitude_history)
+                        times = [a['time'] - self.start_time for a in att_df]
+                        
+                        att_fig = {
+                            'data': [
+                                {'x': times, 'y': [a['roll'] for a in att_df], 'type': 'line', 'name': 'Roll', 'line': {'color': '#FF6B6B'}},
+                                {'x': times, 'y': [a['pitch'] for a in att_df], 'type': 'line', 'name': 'Pitch', 'line': {'color': '#4ECDC4'}},
+                                {'x': times, 'y': [a['yaw'] for a in att_df], 'type': 'line', 'name': 'Yaw', 'line': {'color': '#45B7D1'}}
+                            ],
+                            'layout': {
+                                'title': 'Attitude vs Time',
+                                'paper_bgcolor': 'rgba(0,0,0,0)',
+                                'plot_bgcolor': 'rgba(0,0,0,0)',
+                                'font': {'color': 'white'},
+                                'xaxis': {'title': 'Time (s)', 'color': 'white'},
+                                'yaxis': {'title': 'Angle (degrees)', 'color': 'white'}
+                            }
+                        }
+                    else:
+                        att_fig = {'data': [], 'layout': {'title': 'Attitude vs Time'}}
+                    
+                    return status_display, pos_fig, att_fig
+                    
+                except Exception as e:
+                    error_msg = html.Div([
+                        html.H4("Error"),
+                        html.P(f"Dashboard update error: {str(e)}")
+                    ])
+                    empty_fig = {'data': [], 'layout': {'title': 'Error'}}
+                    return error_msg, empty_fig, empty_fig
+            
+            # Flight mode callback
+            @self.app.callback(
+                Output('flight-mode-dropdown', 'value'),
+                [Input('takeoff-btn', 'n_clicks'),
+                 Input('land-btn', 'n_clicks'),
+                 Input('rtl-btn', 'n_clicks'),
+                 Input('flight-mode-dropdown', 'value')]
+            )
+            def handle_flight_controls(takeoff_clicks, land_clicks, rtl_clicks, selected_mode):
+                ctx = dash.callback_context
+                if not ctx.triggered:
+                    return dash.no_update
+                
+                button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+                
+                if button_id == 'takeoff-btn':
+                    self.fc.set_flight_mode(FlightMode.ALTITUDE_HOLD)
+                    return 'altitude_hold'
+                elif button_id == 'land-btn':
+                    self.fc.set_flight_mode(FlightMode.LAND)
+                    return 'land'
+                elif button_id == 'rtl-btn':
+                    self.fc.set_flight_mode(FlightMode.RTL)
+                    return 'return_to_launch'
+                elif button_id == 'flight-mode-dropdown':
+                    try:
+                        mode = FlightMode(selected_mode)
+                        self.fc.set_flight_mode(mode)
+                        return selected_mode
+                    except ValueError:
+                        return dash.no_update
+                
+                return dash.no_update
+            
+            # Altitude setpoint callback
+            @self.app.callback(
+                Output('altitude-slider', 'value'),
+                [Input('altitude-slider', 'value')]
+            )
+            def update_altitude_setpoint(altitude):
+                if altitude is not None:
+                    self.fc.setpoints['altitude'] = -altitude  # Convert to NED
+                return altitude
+        
         def run(self, debug: bool = False, port: int = 8050):
             """Start the dashboard server"""
-            logger.info(f"🚀 Starting Modern UAV Dashboard on http://localhost:{port}")
+            logger.info(f"🚀 Starting UAV Dashboard on http://localhost:{port}")
             self.app.run(debug=debug, port=port, host='0.0.0.0')

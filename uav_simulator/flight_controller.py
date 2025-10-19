@@ -10,6 +10,8 @@ from .utils import FlightMode, logger
 from .dynamics import UAVState, UAVDynamics
 from .sensor_model import SensorData, SensorModel, ExtendedKalmanFilter
 from .autopilot import PIDController, RLAutopilot
+
+# Import DataLogger at the end to avoid circular imports
 from .datalogger import DataLogger
 
 class FlightController:
@@ -67,7 +69,7 @@ class FlightController:
         # Waypoint acceptance radius
         self.waypoint_acceptance_radius = 2.0
         
-        # Data logger
+        # Data logger - initialize after all other components
         self.data_logger = DataLogger()
         self.data_logger.start_new_log()
         
