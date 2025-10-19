@@ -306,7 +306,7 @@ if HAS_DASH:
             else:
                 # Fallback without Bootstrap
                 self.app.layout = html.Div([
-                    html.H1("UAV Autopilot Simulator", style={'textAlign': 'center', 'color': 'white'}),
+                    html.H1("UAV Autopilot Simulator", style={'textAlign': 'center', 'color': 'black'}),
                     
                     html.Div([
                         html.Div([
