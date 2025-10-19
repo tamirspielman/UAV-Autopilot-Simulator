@@ -62,54 +62,76 @@ class UAVDynamics:
         
     def update(self, state: UAVState, control_input: np.ndarray, dt: float) -> UAVState:
         """
-        Update UAV state using Runge-Kutta 4th order integration
-        control_input: [throttle, roll, pitch, yaw] commands
+        Update UAV state with numerical safety checks
         """
+        # Validate inputs
+        if not np.all(np.isfinite(control_input)):
+            logger.warning("Invalid control input detected, using zeros")
+            control_input = np.zeros(4)
+
         # Convert control input to motor speeds
         motor_speeds = self._mixer(control_input)
-        
-        # RK4 integration
-        k1 = self._state_derivative(state, motor_speeds)
-        k2 = self._state_derivative(self._add_derivative(state, k1, dt/2), motor_speeds)
-        k3 = self._state_derivative(self._add_derivative(state, k2, dt/2), motor_speeds)
-        k4 = self._state_derivative(self._add_derivative(state, k3, dt), motor_speeds)
-        
-        # Combine RK4 steps
-        derivative = self._combine_derivatives(k1, k2, k3, k4)
-        
-        # Update state
+
+        # RK4 integration with safety checks
+        try:
+            k1 = self._state_derivative(state, motor_speeds)
+            k2_state = self._add_derivative(state, k1, dt/2)
+            k2 = self._state_derivative(k2_state, motor_speeds)
+            k3_state = self._add_derivative(state, k2, dt/2)
+            k3 = self._state_derivative(k3_state, motor_speeds)
+            k4_state = self._add_derivative(state, k3, dt)
+            k4 = self._state_derivative(k4_state, motor_speeds)
+
+            # Combine RK4 steps
+            derivative = self._combine_derivatives(k1, k2, k3, k4)
+        except (ValueError, RuntimeWarning) as e:
+            logger.error(f"Numerical error in dynamics: {e}")
+            # Return safe state
+            new_state = UAVState()
+            new_state.timestamp = state.timestamp + dt
+            return new_state
+
+        # Update state with numerical checks
         new_state = UAVState()
-        new_state.position = state.position + derivative['position'] * dt
-        new_state.velocity = state.velocity + derivative['velocity'] * dt
-        new_state.orientation = state.orientation + derivative['orientation'] * dt
-        new_state.angular_velocity = state.angular_velocity + derivative['angular_velocity'] * dt
+        for attr in ['position', 'velocity', 'orientation', 'angular_velocity']:
+            new_value = getattr(state, attr) + derivative[attr] * dt
+            if not np.all(np.isfinite(new_value)):
+                logger.warning(f"Non-finite value in {attr}, resetting")
+                new_value = np.zeros_like(new_value)
+            setattr(new_state, attr, new_value)
+    
         new_state.motor_speeds = motor_speeds
         new_state.acceleration = derivative['velocity']
         new_state.timestamp = state.timestamp + dt
-        
+    
         # Normalize angles
         new_state.orientation = normalize_angles(new_state.orientation)
-        
-        return new_state
     
+        return new_state
     def _mixer(self, control_input: np.ndarray) -> np.ndarray:
         """
-        Motor mixing algorithm (converts control to motor speeds)
+        IMPROVED: More stable motor mixing with better scaling
         """
         throttle, roll, pitch, yaw = control_input
-        
-        # Quadcopter X configuration
-        motor_speeds = np.array([
-            throttle + roll + pitch - yaw,  # Front-right
-            throttle - roll + pitch + yaw,  # Front-left
-            throttle - roll - pitch - yaw,  # Rear-left
-            throttle + roll - pitch + yaw   # Rear-right
+
+        # Apply limits to control inputs first
+        throttle = np.clip(throttle, 0.0, 1.0)
+        roll = np.clip(roll, -0.5, 0.5)
+        pitch = np.clip(pitch, -0.5, 0.5)
+        yaw = np.clip(yaw, -0.3, 0.3)
+
+        # Quadcopter X configuration mixing with gentler scaling
+        motor_commands = np.array([
+            throttle + 0.5*pitch + 0.5*roll - 0.3*yaw,   # Front-right
+            throttle + 0.5*pitch - 0.5*roll + 0.3*yaw,   # Front-left  
+            throttle - 0.5*pitch - 0.5*roll - 0.3*yaw,   # Rear-left
+            throttle - 0.5*pitch + 0.5*roll + 0.3*yaw    # Rear-right
         ])
-        
-        # Saturate motor speeds
-        motor_speeds = np.clip(motor_speeds, 0, self.max_rpm)
-        return motor_speeds
-    
+
+        # Convert to motor speeds with safer scaling
+        motor_speeds = motor_commands * 3000 + 5000  # 2000-8000 RPM range
+
+        return np.clip(motor_speeds, 2000, 8000)
     def _state_derivative(self, state: UAVState, motor_speeds: np.ndarray) -> Dict:
         """Calculate state derivatives for dynamics integration"""
         # Calculate forces and torques

@@ -19,57 +19,52 @@ if HAS_TORCH:
     import torch.nn as nn
 
 class PIDController:
-    """
-    PID controller with enhanced anti-windup and derivative filtering
-    FIXED based on flight log analysis
-    """
-    
     def __init__(self, kp: float, ki: float, kd: float, 
-                 output_limits: Tuple[float, float] = (-1, 1)):
+                 output_limits: Tuple[float, float] = (-0.5, 0.5)):  # Tighter limits
         self.kp = kp
         self.ki = ki
         self.kd = kd
         self.output_min, self.output_max = output_limits
+    
+        # Even tighter integral limits
+        self.integral_limit = abs(output_limits[1] - output_limits[0]) * 0.2
+
+            # FIXED: More derivative filtering for smoothness
+        self.derivative_filter_alpha = 0.02  # More filtering
         
-        # Internal state
-        self.integral = 0
-        self.prev_error = 0
-        self.prev_derivative = 0
-        
-        # FIXED: Adaptive integral limit based on output limits
-        self.integral_limit = abs(output_limits[1] - output_limits[0]) * 0.5
-        
-        # FIXED: Improved derivative filter (lower alpha = more filtering)
-        self.derivative_filter_alpha = 0.05  # Reduced from 0.1 for smoother response
-        
-        # FIXED: Track saturation for conditional integration
         self.was_saturated = False
         
     def compute(self, setpoint: float, measurement: float, dt: float) -> float:
-        """
-        Compute PID output with improved anti-windup
-        FIXED: Better handling of integral term and saturation
-        """
         if dt <= 0:
             return 0.0
             
         error = setpoint - measurement
         
+        # FIXED: Small deadzone to prevent oscillation
+        if abs(error) < 0.05:
+            error = 0
+        
         # Proportional term
         p_term = self.kp * error
         
-        # FIXED: Conditional integration (don't integrate when saturated)
-        if not self.was_saturated or np.sign(error) != np.sign(self.integral):
+        # FIXED: Conditional integration with leaky anti-windup
+        if not self.was_saturated:
             self.integral += error * dt
+        else:
+            # Leaky integration when saturated
+            self.integral *= 0.95
             
-        # FIXED: Stricter integral clamping
+        # Stricter integral clamping
         self.integral = np.clip(self.integral, -self.integral_limit, self.integral_limit)
         i_term = self.ki * self.integral
         
-        # FIXED: Derivative term with better filtering
-        derivative = (error - self.prev_error) / dt
-        
-        # Low-pass filter on derivative (exponential moving average)
+        # FIXED: Better derivative calculation with more filtering
+        if dt > 0:
+            derivative = (error - self.prev_error) / dt
+        else:
+            derivative = 0
+            
+        # Strong low-pass filter on derivative
         derivative = (self.derivative_filter_alpha * derivative + 
                      (1 - self.derivative_filter_alpha) * self.prev_derivative)
         self.prev_derivative = derivative
@@ -82,21 +77,17 @@ class PIDController:
         output_limited = np.clip(output, self.output_min, self.output_max)
         self.was_saturated = (output != output_limited)
         
-        # FIXED: Back-calculation anti-windup
-        # If saturated and error would make it worse, reduce integral
-        if self.was_saturated:
-            # Calculate how much we're saturated by
+        # FIXED: Gentle back-calculation anti-windup
+        if self.was_saturated and abs(self.ki) > 1e-6:
             saturation_error = output - output_limited
-            # Back-calculate integral adjustment
-            if abs(self.ki) > 1e-6:  # Avoid division by zero
-                integral_adjustment = saturation_error / self.ki
-                self.integral -= integral_adjustment * 0.5  # Gradually reduce
-                self.integral = np.clip(self.integral, -self.integral_limit, self.integral_limit)
+            integral_adjustment = saturation_error / self.ki
+            self.integral -= integral_adjustment * 0.3  # Gentle reduction
+            self.integral = np.clip(self.integral, -self.integral_limit, self.integral_limit)
         
         self.prev_error = error
         
         return output_limited
-    
+        
     def reset(self):
         """Reset controller state"""
         self.integral = 0
@@ -152,8 +143,11 @@ class UAVEnvironment:
         """Reset environment to initial state"""
         self.state = UAVState()
         self.state.position = np.array([0, 0, 1])  # Start 1m above ground
+        self.state.velocity = np.zeros(3)
+        self.state.orientation = np.zeros(3)
         self.current_step = 0
         self.prev_action = None
+        self.control_output = np.array([0.52, 0, 0, 0])  # Near-hover throttle
         return self._get_observation()
     
     def step(self, action: np.ndarray):
