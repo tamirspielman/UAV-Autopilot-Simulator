@@ -253,7 +253,8 @@ if HAS_DASH:
                                             {'label': 'Land', 'value': 'land'},
                                             {'label': 'AI Pilot', 'value': 'ai_pilot'}
                                         ],
-                                        value='auto'
+                                        value='auto',
+                                        style={'color': 'black', 'backgroundColor': 'white'}
                                     ),
                                     html.Br(),
                                     html.Label("Target Altitude (m)"),
@@ -302,11 +303,11 @@ if HAS_DASH:
                         n_intervals=0
                     )
                     
-                ], fluid=True, style={'backgroundColor': '#1e1e1e', 'minHeight': '100vh', 'padding': '20px'})
+                ], fluid=True, style={'backgroundColor': "#000000", 'minHeight': '100vh', 'padding': '20px'})
             else:
                 # Fallback without Bootstrap
                 self.app.layout = html.Div([
-                    html.H1("UAV Autopilot Simulator", style={'textAlign': 'center', 'color': 'black'}),
+                    html.H1("UAV Autopilot Simulator", style={'textAlign': 'center', 'color': 'white'}),
                     
                     html.Div([
                         html.Div([
@@ -323,7 +324,8 @@ if HAS_DASH:
                                     {'label': 'Land', 'value': 'land'},
                                     {'label': 'AI Pilot', 'value': 'ai_pilot'}
                                 ],
-                                value='auto'
+                                value='auto',
+                                style={'color': 'black', 'backgroundColor': 'white'}
                             ),
                             html.Br(),
                             html.Label("Target Altitude"),
@@ -348,7 +350,7 @@ if HAS_DASH:
                         n_intervals=0
                     )
                     
-                ], style={'backgroundColor': '#1e1e1e', 'color': 'white', 'fontFamily': 'Arial'})
+                ], style={'backgroundColor': "#000000", 'color': 'white', 'fontFamily': 'Arial'})
         
         def setup_callbacks(self):
             """Setup the dashboard callbacks"""
