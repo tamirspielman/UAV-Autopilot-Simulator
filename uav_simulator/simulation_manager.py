@@ -1,5 +1,5 @@
 """
-Simulation Manager and Enhanced Dashboard Interface
+Simulation Manager - FIXED Waypoint Coordinate System
 """
 import time
 import threading
@@ -28,7 +28,7 @@ if HAS_DASH:
 
 class SimulationManager:
     """
-    Manages the complete simulation with enhanced mission capabilities
+    Manages the complete simulation with FIXED waypoint handling
     """
     
     def __init__(self):
@@ -46,14 +46,15 @@ class SimulationManager:
         # Performance monitoring
         self.update_times = deque(maxlen=100)
         
-        # Mission waypoints
+        # FIXED: Default waypoints with CORRECT NED coordinates
+        # Remember: In NED, negative Z = positive altitude
         self.default_waypoints = [
-            np.array([0, 0, 10]),      # Start at 10m altitude 
-            np.array([15, 10, 20]),    # First waypoint at 20m altitude  
-            np.array([25, -5, 30]),    # Second waypoint at 30m altitude
-            np.array([10, -15, 25]),   # Third waypoint at 25m altitude
-            np.array([0, 0, 10])       # Return to start at 10m altitude
-    ]
+            np.array([0.0, 0.0, -10.0]),    # Home: 10m altitude
+            np.array([10.0, 0.0, -15.0]),   # WP1: North 10m, 15m altitude
+            np.array([10.0, 10.0, -20.0]),  # WP2: North 10m, East 10m, 20m altitude
+            np.array([0.0, 10.0, -15.0]),   # WP3: East 10m, 15m altitude
+            np.array([0.0, 0.0, -10.0])     # Return home: 10m altitude
+        ]
         
         # Initialize mission
         self._initialize_mission()
@@ -64,11 +65,18 @@ class SimulationManager:
         self.flight_controller.set_flight_mode(FlightMode.STABILIZE)
     
     def add_waypoint(self, x: float, y: float, z: float):
-        """Add a new waypoint to the mission"""
-        new_waypoint = np.array([x, y, -abs(z)])  # Ensure negative for NED
+        """
+        Add a new waypoint to the mission
+        FIXED: Correct conversion from user altitude to NED
+        x: North position (meters)
+        y: East position (meters)  
+        z: Altitude above ground (meters, up-positive)
+        """
+        # Convert to NED: negative Z for positive altitude
+        new_waypoint = np.array([x, y, -abs(z)])
         self.default_waypoints.insert(-1, new_waypoint)  # Insert before final return
         self.flight_controller.set_waypoints(self.default_waypoints)
-        logger.info(f"Added waypoint: [{x}, {y}, {z}]")
+        logger.info(f"Added waypoint: N{x} E{y} Alt{z}m (NED: [{x}, {y}, {-abs(z)}])")
     
     def clear_waypoints(self):
         """Clear all waypoints except home"""
@@ -77,11 +85,15 @@ class SimulationManager:
         logger.info("Cleared waypoints")
     
     def set_home_position(self, x: float, y: float, z: float):
-        """Set new home position"""
-        self.default_waypoints[0] = np.array([x, y, abs(z)])
-        self.default_waypoints[-1] = np.array([x, y, abs(z)])
+        """
+        Set new home position
+        FIXED: Correct NED conversion
+        """
+        home_ned = np.array([x, y, -abs(z)])
+        self.default_waypoints[0] = home_ned
+        self.default_waypoints[-1] = home_ned
         self.flight_controller.set_waypoints(self.default_waypoints)
-        logger.info(f"Home position set to: [{x}, {y}, {z}]")
+        logger.info(f"Home position set to: N{x} E{y} Alt{z}m")
     
     def start_simulation(self):
         """Start the simulation"""
@@ -186,8 +198,8 @@ class SimulationManager:
                 time.sleep(1)
                 # Print some basic telemetry
                 telemetry = self.flight_controller.get_telemetry()
-                altitude = -telemetry['position'][2]
-                print(f"Position: N{telemetry['position'][0]:.1f}, E{telemetry['position'][1]:.1f}, Alt{altitude:.1f}m, Mode: {telemetry['flight_mode']}")
+                altitude = telemetry['altitude']
+                print(f"Position: N{telemetry['position'][0]:.1f} E{telemetry['position'][1]:.1f} Alt{altitude:.1f}m, Mode: {telemetry['flight_mode']}")
         except KeyboardInterrupt:
             logger.info("Shutting down...")
         finally:
@@ -434,7 +446,7 @@ if HAS_DASH:
                 try:
                     # Get telemetry data
                     telemetry = self.fc.get_telemetry()
-                    current_altitude = -telemetry['position'][2]
+                    current_altitude = telemetry['altitude']  # Already up-positive
                     
                     # Update data buffers
                     current_time = time.time()
@@ -496,8 +508,9 @@ if HAS_DASH:
                     # Create 3D trajectory plot
                     traj_fig = self._create_3d_trajectory_plot()
                     
-                    # Altitude display
-                    alt_display = f"Current: {current_altitude:.1f}m | Target: {-self.fc.setpoints['position'][2]:.1f}m"
+                    # Altitude display - FIXED
+                    target_alt = self.fc.setpoints['altitude']
+                    alt_display = f"Current: {current_altitude:.1f}m | Target: {target_alt:.1f}m"
                     
                     return status_display, pos_fig, att_fig, traj_fig, alt_display
                     
@@ -563,12 +576,11 @@ if HAS_DASH:
                         
                 elif button_id == 'add-waypoint-btn':
                     if x is not None and y is not None and z is not None:
-                        # Convert to NED coordinates: z becomes negative for altitude
-                        ned_z = abs(z)  # Ensure negative for proper altitude
-                        new_wp = {'x': x, 'y': y, 'z': z, 'ned_z': ned_z, 'id': len(waypoints)}
+                        # FIXED: Store with correct altitude (positive up)
+                        new_wp = {'x': x, 'y': y, 'z': abs(z), 'id': len(waypoints)}
                         waypoints.append(new_wp)
-                        # Convert to numpy array in NED coordinates and update flight controller
-                        wp_array = [np.array([wp['x'], wp['y'], wp['ned_z']]) for wp in waypoints]
+                        # Convert to NED for flight controller
+                        wp_array = [np.array([wp['x'], wp['y'], -abs(wp['z'])]) for wp in waypoints]
                         self.fc.set_waypoints(wp_array)
                         return dash.no_update, waypoints               
                 elif button_id == 'clear-waypoints-btn':
@@ -705,7 +717,6 @@ if HAS_DASH:
                     yaxis_title='East (m)',
                     zaxis_title='Altitude (m)',
                     bgcolor='rgba(20,20,20,1)',
-                    # FIXED: Apply gridcolor to individual axes, not scene
                     xaxis=dict(gridcolor='gray', showbackground=True),
                     yaxis=dict(gridcolor='gray', showbackground=True),
                     zaxis=dict(gridcolor='gray', showbackground=True),
