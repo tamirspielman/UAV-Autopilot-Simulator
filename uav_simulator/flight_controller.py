@@ -380,8 +380,16 @@ class FlightController:
         vertical_velocity = -self.estimated_state.velocity[2]
         
         return {
-            'position': self.estimated_state.position.tolist(),
-            'velocity': self.estimated_state.velocity.tolist(),
+            'position': [
+                self.estimated_state.position[0],  # X (North)
+                self.estimated_state.position[1],  # Y (East) 
+                current_altitude  # Z (Altitude - positive!)
+            ],
+            'velocity': [
+                self.estimated_state.velocity[0],
+                self.estimated_state.velocity[1],
+                vertical_velocity  # Positive for climb
+            ],
             'attitude': self.estimated_state.orientation.tolist(),
             'flight_mode': self.flight_mode.value,
             'battery': 85.0,

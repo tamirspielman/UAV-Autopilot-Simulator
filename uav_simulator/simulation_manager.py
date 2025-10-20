@@ -506,7 +506,7 @@ if HAS_DASH and HAS_PLOTLY:
                 try:
                     # Get telemetry data
                     telemetry = self.fc.get_telemetry()
-                    current_altitude = telemetry['altitude']
+                    current_altitude = -telemetry['altitude']
                     
                     # Update data buffers
                     current_time = time.time()

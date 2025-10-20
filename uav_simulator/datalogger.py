@@ -67,17 +67,13 @@ class DataLogger:
             self.logging_enabled = False
     
     def log_data(self, flight_controller: 'FlightController'):
-        """
-        Log comprehensive flight data to CSV.
-        Robust against missing keys, NaNs, and orientation wrap-around.
-        """
         if not self.logging_enabled or self.csv_writer is None or self.csv_file is None:
             return
-
         try:
             current_time = time.time()
             simulation_time = current_time - self.start_time
-
+            altitude = -flight_controller.state.position[2]  
+            vertical_velocity = -flight_controller.state.velocity[2]  
             # Safe setpoint extraction
             position_sp = flight_controller.setpoints.get('position', flight_controller.state.position)
             attitude_sp = flight_controller.setpoints.get('attitude', np.zeros(3))
@@ -99,14 +95,13 @@ class DataLogger:
             row = {
                 'timestamp': current_time,
                 'simulation_time': simulation_time,
-
                 # True state (essential only)
                 'position_x': flight_controller.state.position[0],
                 'position_y': flight_controller.state.position[1],
-                'position_z': flight_controller.state.position[2],
+                'position_z': altitude,
                 'velocity_x': flight_controller.state.velocity[0],
                 'velocity_y': flight_controller.state.velocity[1],
-                'velocity_z': flight_controller.state.velocity[2],
+                'velocity_z': vertical_velocity,
                 'attitude_roll': flight_controller.state.orientation[0],
                 'attitude_pitch': flight_controller.state.orientation[1],
                 'attitude_yaw': flight_controller.state.orientation[2],
