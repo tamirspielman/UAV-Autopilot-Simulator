@@ -25,18 +25,17 @@ class PIDController:
         self.ki = ki
         self.kd = kd
         self.output_min, self.output_max = output_limits
-    
-        # Even tighter integral limits
-        self.integral_limit = abs(output_limits[1] - output_limits[0]) * 0.2
-
-        # FIXED: More derivative filtering for smoothness
-        self.derivative_filter_alpha = 0.02  # More filtering
         
-        # CRITICAL FIX: Initialize these state variables HERE in __init__
+        # Reasonable integral limits
+        self.integral_limit = 1.0  # Absolute limit, not relative
+        
+        # Moderate derivative filtering
+        self.derivative_filter_alpha = 0.1  # Less aggressive filtering
+        
+        # Initialize state variables
         self.integral = 0.0
         self.prev_error = 0.0
         self.prev_derivative = 0.0
-        self.was_saturated = False
         
     def compute(self, setpoint: float, measurement: float, dt: float) -> float:
         if dt <= 0:
@@ -44,61 +43,53 @@ class PIDController:
             
         error = setpoint - measurement
         
-        # FIXED: Small deadzone to prevent oscillation
-        if abs(error) < 0.05:
-            error = 0
+        # Remove deadzone - let PID handle small errors naturally
+        # if abs(error) < 0.05:
+        #     error = 0
         
         # Proportional term
         p_term = self.kp * error
         
-        # FIXED: Conditional integration with leaky anti-windup
-        if not self.was_saturated:
-            self.integral += error * dt
-        else:
-            # Leaky integration when saturated
-            self.integral *= 0.95
-            
-        # Stricter integral clamping
+        # Integral term with clamping
+        self.integral += error * dt
         self.integral = np.clip(self.integral, -self.integral_limit, self.integral_limit)
         i_term = self.ki * self.integral
         
-        # FIXED: Better derivative calculation with more filtering
+        # Derivative term with filtering
         if dt > 0:
             derivative = (error - self.prev_error) / dt
         else:
             derivative = 0
             
-        # Strong low-pass filter on derivative
+        # Apply derivative filtering
         derivative = (self.derivative_filter_alpha * derivative + 
                      (1 - self.derivative_filter_alpha) * self.prev_derivative)
-        self.prev_derivative = derivative
+        
         d_term = self.kd * derivative
         
         # Compute output
         output = p_term + i_term + d_term
         
-        # Apply limits and track saturation
+        # Apply output limits
         output_limited = np.clip(output, self.output_min, self.output_max)
-        self.was_saturated = (output != output_limited)
         
-        # FIXED: Gentle back-calculation anti-windup
-        if self.was_saturated and abs(self.ki) > 1e-6:
-            saturation_error = output - output_limited
-            integral_adjustment = saturation_error / self.ki
-            self.integral -= integral_adjustment * 0.3  # Gentle reduction
-            self.integral = np.clip(self.integral, -self.integral_limit, self.integral_limit)
+        # Simple anti-windup: stop integrating when saturated
+        if output_limited == self.output_min or output_limited == self.output_max:
+            # Don't accumulate integral when at limits
+            self.integral -= error * dt  # Undo the integration
         
+        # Update state
         self.prev_error = error
+        self.prev_derivative = derivative
         
         return output_limited
         
     def reset(self):
         """Reset controller state"""
-        self.integral = 0
-        self.prev_error = 0
-        self.prev_derivative = 0
-        self.was_saturated = False
-        
+        self.integral = 0.0
+        self.prev_error = 0.0
+        self.prev_derivative = 0.0
+        self.was_saturated = False    
     def get_state(self) -> Dict:
         """Get internal state for debugging"""
         return {

@@ -1,5 +1,5 @@
 """
-Simulation Manager - FIXED Waypoint Coordinate System
+Simulation Manager - FIXED Waypoint Coordinate System with WORKING Dashboard
 """
 import time
 import threading
@@ -19,7 +19,8 @@ HAS_DBC = IMPORTS.get('dbc', False)
 
 if HAS_DASH:
     import dash
-    from dash import dcc, html, Input, Output, State
+    from dash import dcc, html
+    from dash.dependencies import Input, Output, State
     if HAS_DBC:
         import dash_bootstrap_components as dbc
     if HAS_PLOTLY:
@@ -28,15 +29,26 @@ if HAS_DASH:
 
 class SimulationManager:
     """
-    Manages the complete simulation with FIXED waypoint handling
+    Manages the complete simulation with FIXED waypoint handling and WORKING dashboard
     """
     
     def __init__(self):
         self.flight_controller = FlightController()
-        if HAS_DASH:
-            self.dashboard = EnhancedUAVDashboard(self.flight_controller)
+        
+        # Initialize dashboard BEFORE any simulation starts
+        if HAS_DASH and HAS_PLOTLY:
+            try:
+                self.dashboard = EnhancedUAVDashboard(self.flight_controller)
+                logger.info("Enhanced dashboard initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize dashboard: {e}")
+                self.dashboard = None
         else:
             self.dashboard = None
+            if not HAS_DASH:
+                logger.warning("Dash not available - dashboard disabled")
+            if not HAS_PLOTLY:
+                logger.warning("Plotly not available - dashboard disabled")
         
         # Simulation state
         self.running = False
@@ -165,9 +177,11 @@ class SimulationManager:
     
     def run_with_dashboard(self, port: int = 8050):
         """Run simulation with enhanced web dashboard"""
-        if not HAS_DASH or self.dashboard is None:
-            print("Dash not available. Cannot run dashboard.")
-            print("To enable the dashboard, install: pip install dash plotly dash-bootstrap-components")
+        if self.dashboard is None:
+            print("Dashboard not available. Cannot run dashboard.")
+            print("To enable the dashboard, install required packages:")
+            print("pip install dash plotly dash-bootstrap-components")
+            self.run_headless()
             return
             
         logger.info("Starting simulation with enhanced dashboard...")
@@ -222,11 +236,12 @@ class SimulationManager:
             logger.error(f"Error exporting flight data: {e}")
             return False
 
+
 # Enhanced UAV Dashboard with modern UI and mission planning
-if HAS_DASH:
+if HAS_DASH and HAS_PLOTLY:
     class EnhancedUAVDashboard:
         """
-        Modern UAV Dashboard with Enhanced Features
+        Modern UAV Dashboard with Enhanced Features - FIXED LAYOUT
         """
         
         def __init__(self, flight_controller: FlightController):
@@ -238,7 +253,7 @@ if HAS_DASH:
             else:
                 self.app = dash.Dash(__name__)
             
-            # Set up the enhanced layout
+            # Set up the enhanced layout IMMEDIATELY
             self.setup_enhanced_layout()
             
             # Set up callbacks
@@ -252,11 +267,14 @@ if HAS_DASH:
             
             # Mission waypoints for display
             self.mission_waypoints = []
+            
+            logger.info("Dashboard layout initialized successfully")
         
         def setup_enhanced_layout(self):
-            """Setup modern, professional layout"""
+            """Setup modern, professional layout - FIXED VERSION"""
+            # Define the layout directly to ensure it's not None
             if HAS_DBC:
-                self.app.layout = dbc.Container([
+                layout = dbc.Container([
                     # Header
                     dbc.Row([
                         dbc.Col([
@@ -291,8 +309,7 @@ if HAS_DASH:
                                                     {'label': '🎯 Position Hold', 'value': 'position_hold'},
                                                     {'label': '🚀 Auto Mission', 'value': 'auto'},
                                                     {'label': '🏠 Return to Launch', 'value': 'return_to_launch'},
-                                                    {'label': '🛬 Land', 'value': 'land'},
-                                                    {'label': '🤖 AI Pilot', 'value': 'ai_pilot'}
+                                                    {'label': '🛬 Land', 'value': 'land'}
                                                 ],
                                                 value='stabilize',
                                                 className='mb-3'
@@ -405,13 +422,13 @@ if HAS_DASH:
                             dbc.Row([
                                 dbc.Col([
                                     dbc.Card([
-                                        dbc.CardHeader("📈 Position Tracking"),
+                                        dbc.CardHeader("📈 Position Tracking", style={'color': 'white'}),
                                         dbc.CardBody([dcc.Graph(id='position-plot')])
                                     ])
                                 ], width=6),
                                 dbc.Col([
                                     dbc.Card([
-                                        dbc.CardHeader("🎚️ Attitude"),
+                                        dbc.CardHeader("🎚️ Attitude", style={'color': 'white'}),
                                         dbc.CardBody([dcc.Graph(id='attitude-plot')])
                                     ])
                                 ], width=6)
@@ -430,6 +447,49 @@ if HAS_DASH:
                     dcc.Store(id='waypoints-store', data=[])
                     
                 ], fluid=True, style={'backgroundColor': '#1a1a1a', 'minHeight': '100vh', 'padding': '20px'})
+            else:
+                # Fallback layout without dbc
+                layout = html.Div([
+                    html.H1("🚁 UAV Autopilot Simulator", 
+                           style={'textAlign': 'center', 'color': '#2c3e50'}),
+                    
+                    html.Div([
+                        html.Div([
+                            html.H3("Flight Controls"),
+                            dcc.Dropdown(
+                                id='flight-mode-dropdown',
+                                options=[
+                                    {'label': 'Stabilize', 'value': 'stabilize'},
+                                    {'label': 'Altitude Hold', 'value': 'altitude_hold'},
+                                    {'label': 'Auto Mission', 'value': 'auto'},
+                                    {'label': 'Return to Launch', 'value': 'return_to_launch'},
+                                    {'label': 'Land', 'value': 'land'}
+                                ],
+                                value='stabilize'
+                            ),
+                            html.Button('Takeoff', id='takeoff-btn', n_clicks=0),
+                            html.Button('Land', id='land-btn', n_clicks=0),
+                        ], style={'width': '30%', 'display': 'inline-block', 'verticalAlign': 'top'}),
+                        
+                        html.Div([
+                            html.H3("Telemetry"),
+                            html.Div(id='status-display')
+                        ], style={'width': '65%', 'display': 'inline-block', 'marginLeft': '5%'}),
+                    ]),
+                    
+                    dcc.Graph(id='position-plot'),
+                    dcc.Graph(id='attitude-plot'),
+                    dcc.Graph(id='3d-trajectory-plot'),
+                    
+                    dcc.Interval(
+                        id='update-interval',
+                        interval=1000,
+                        n_intervals=0
+                    )
+                ])
+            
+            # CRITICAL: Set the layout attribute
+            self.app.layout = layout
         
         def setup_enhanced_callbacks(self):
             """Setup enhanced dashboard callbacks"""
@@ -446,7 +506,7 @@ if HAS_DASH:
                 try:
                     # Get telemetry data
                     telemetry = self.fc.get_telemetry()
-                    current_altitude = telemetry['altitude']  # Already up-positive
+                    current_altitude = telemetry['altitude']
                     
                     # Update data buffers
                     current_time = time.time()
@@ -464,57 +524,62 @@ if HAS_DASH:
                     })
                     
                     # Create enhanced status display
-                    status_display = dbc.Row([
-                        dbc.Col([
-                            dbc.Card([
-                                dbc.CardBody([
-                                    html.H4("📍 Position", className='text-info'),
-                                    html.P(f"North: {telemetry['position'][0]:.1f}m", className='text-light'),
-                                    html.P(f"East: {telemetry['position'][1]:.1f}m", className='text-light'),
-                                    html.P(f"Altitude: {current_altitude:.1f}m", className='text-light')
-                                ])
-                            ])
-                        ], width=4),
-                        dbc.Col([
-                            dbc.Card([
-                                dbc.CardBody([
-                                    html.H4("🎯 Attitude", className='text-info'),
-                                    html.P(f"Roll: {np.degrees(telemetry['attitude'][0]):.1f}°", className='text-light'),
-                                    html.P(f"Pitch: {np.degrees(telemetry['attitude'][1]):.1f}°", className='text-light'),
-                                    html.P(f"Yaw: {np.degrees(telemetry['attitude'][2]):.1f}°", className='text-light')
-                                ])
-                            ])
-                        ], width=4),
-                        dbc.Col([
-                            dbc.Card([
-                                dbc.CardBody([
-                                    html.H4("⚡ System", className='text-info'),
-                                    html.P(f"Mode: {telemetry['flight_mode']}", className='text-light'),
-                                    html.P(f"Battery: {telemetry['battery']}%", className='text-light'),
-                                    html.P(f"Waypoint: {telemetry['waypoint_index'] + 1}/{(len(self.fc.waypoints) if self.fc.waypoints else 0)}", className='text-light'),
-                                    html.P(f"Mission: {'✅ Complete' if telemetry['mission_complete'] else '🟡 Running'}", 
-                                          className='text-success' if telemetry['mission_complete'] else 'text-warning')
-                                ])
-                            ])
-                        ], width=4)
-                    ])
-                    
-                    # Create position plot
+                    # In the update_dashboard function, replace the status_display section:
+                    if HAS_DBC:
+                        status_display = dbc.Row([
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardBody([
+                                        html.H4("📍 Position", className='text-white', style={'color': 'white'}),
+                                        html.P(f"North: {telemetry['position'][0]:.1f}m", className='text-white', style={'color': 'white'}),
+                                        html.P(f"East: {telemetry['position'][1]:.1f}m", className='text-white', style={'color': 'white'}),
+                                        html.P(f"Altitude: {current_altitude:.1f}m", className='text-white', style={'color': 'white'})
+                                    ], style={'backgroundColor': '#2a2a2a'})
+                                ], style={'border': '1px solid #444'})
+                            ], width=4),
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardBody([
+                                        html.H4("🎯 Attitude", className='text-white', style={'color': 'white'}),
+                                        html.P(f"Roll: {np.degrees(telemetry['attitude'][0]):.1f}°", className='text-white', style={'color': 'white'}),
+                                        html.P(f"Pitch: {np.degrees(telemetry['attitude'][1]):.1f}°", className='text-white', style={'color': 'white'}),
+                                        html.P(f"Yaw: {np.degrees(telemetry['attitude'][2]):.1f}°", className='text-white', style={'color': 'white'})
+                                    ], style={'backgroundColor': '#2a2a2a'})
+                                ], style={'border': '1px solid #444'})
+                            ], width=4),
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardBody([
+                                        html.H4("⚡ System", className='text-white', style={'color': 'white'}),
+                                        html.P(f"Mode: {telemetry['flight_mode']}", className='text-white', style={'color': 'white'}),
+                                        html.P(f"Waypoint: {telemetry['waypoint_index'] + 1}/{(len(self.fc.waypoints) if self.fc.waypoints else 0)}", className='text-white', style={'color': 'white'}),
+                                        html.P(f"Mission: {'✅ Complete' if telemetry['mission_complete'] else '🟡 Running'}", 
+                                              className='text-success' if telemetry['mission_complete'] else 'text-warning', style={'color': 'white'})
+                                    ], style={'backgroundColor': '#2a2a2a'})
+                                ], style={'border': '1px solid #444'})
+                            ], width=4)
+                        ])
+                    else:
+                        # Fallback with white text
+                        status_display = html.Div([
+                            html.P(f"Position: N{telemetry['position'][0]:.1f} E{telemetry['position'][1]:.1f} Alt{current_altitude:.1f}m", style={'color': 'white'}),
+                            html.P(f"Attitude: Roll{np.degrees(telemetry['attitude'][0]):.1f}° Pitch{np.degrees(telemetry['attitude'][1]):.1f}° Yaw{np.degrees(telemetry['attitude'][2]):.1f}°", style={'color': 'white'}),
+                            html.P(f"Mode: {telemetry['flight_mode']} | WP: {telemetry['waypoint_index'] + 1}/{(len(self.fc.waypoints) if self.fc.waypoints else 0)}", style={'color': 'white'})
+                        ], style={'color': 'white'})
+                            
+                    # Create plots
                     pos_fig = self._create_position_plot()
-                    
-                    # Create attitude plot  
                     att_fig = self._create_attitude_plot()
-                    
-                    # Create 3D trajectory plot
                     traj_fig = self._create_3d_trajectory_plot()
                     
-                    # Altitude display - FIXED
-                    target_alt = self.fc.setpoints['altitude']
+                    # Altitude display
+                    target_alt = self.fc.setpoints.get('altitude', 0)
                     alt_display = f"Current: {current_altitude:.1f}m | Target: {target_alt:.1f}m"
                     
                     return status_display, pos_fig, att_fig, traj_fig, alt_display
                     
                 except Exception as e:
+                    logger.error(f"Dashboard update error: {e}")
                     error_msg = html.Div([
                         html.H4("❌ Error", className='text-danger'),
                         html.P(f"Dashboard update error: {str(e)}", className='text-light')
@@ -542,51 +607,61 @@ if HAS_DASH:
                               selected_mode, add_clicks, clear_clicks, x, y, z, waypoints_data):
                 ctx = dash.callback_context
                 if not ctx.triggered:
-                    return dash.no_update, waypoints_data
+                    return dash.no_update, waypoints_data or []
                 
                 button_id = ctx.triggered[0]['prop_id'].split('.')[0]
                 waypoints = waypoints_data or []
                 
-                if button_id == 'takeoff-btn':
-                    self.fc.set_flight_mode(FlightMode.ALTITUDE_HOLD)
-                    self.fc.setpoints['altitude'] = 10.0
-                    return 'altitude_hold', waypoints
-                    
-                elif button_id == 'land-btn':
-                    self.fc.set_flight_mode(FlightMode.LAND)
-                    return 'land', waypoints
-                    
-                elif button_id == 'rtl-btn':
-                    self.fc.set_flight_mode(FlightMode.RTL)
-                    return 'return_to_launch', waypoints
-                    
-                elif button_id == 'reset-btn':
-                    self.fc.set_flight_mode(FlightMode.STABILIZE)
-                    self.fc.mission_complete = False
-                    self.fc.current_waypoint_index = 0
-                    return 'stabilize', waypoints
-                    
-                elif button_id == 'flight-mode-dropdown':
-                    try:
-                        mode = FlightMode(selected_mode)
-                        self.fc.set_flight_mode(mode)
-                        return selected_mode, waypoints
-                    except ValueError:
-                        return dash.no_update, waypoints
+                try:
+                    if button_id == 'takeoff-btn':
+                        self.fc.set_flight_mode(FlightMode.ALTITUDE_HOLD)
+                        self.fc.setpoints['altitude'] = 10.0
+                        return 'altitude_hold', waypoints
                         
-                elif button_id == 'add-waypoint-btn':
-                    if x is not None and y is not None and z is not None:
-                        # FIXED: Store with correct altitude (positive up)
-                        new_wp = {'x': x, 'y': y, 'z': abs(z), 'id': len(waypoints)}
-                        waypoints.append(new_wp)
-                        # Convert to NED for flight controller
-                        wp_array = [np.array([wp['x'], wp['y'], -abs(wp['z'])]) for wp in waypoints]
-                        self.fc.set_waypoints(wp_array)
-                        return dash.no_update, waypoints               
-                elif button_id == 'clear-waypoints-btn':
-                    waypoints = []
-                    self.fc.set_waypoints([])
-                    return dash.no_update, waypoints
+                    elif button_id == 'land-btn':
+                        self.fc.set_flight_mode(FlightMode.LAND)
+                        return 'land', waypoints
+                        
+                    elif button_id == 'rtl-btn':
+                        self.fc.set_flight_mode(FlightMode.RTL)
+                        return 'return_to_launch', waypoints
+                        
+                    elif button_id == 'reset-btn':
+                        self.fc.set_flight_mode(FlightMode.STABILIZE)
+                        self.fc.mission_complete = False
+                        self.fc.current_waypoint_index = 0
+                        return 'stabilize', waypoints
+                        
+                    elif button_id == 'flight-mode-dropdown':
+                        if selected_mode:
+                            mode_map = {
+                                'stabilize': FlightMode.STABILIZE,
+                                'altitude_hold': FlightMode.ALTITUDE_HOLD,
+                                'position_hold': FlightMode.POSITION_HOLD,
+                                'auto': FlightMode.AUTO,
+                                'return_to_launch': FlightMode.RTL,
+                                'land': FlightMode.LAND
+                            }
+                            if selected_mode in mode_map:
+                                self.fc.set_flight_mode(mode_map[selected_mode])
+                        return selected_mode, waypoints
+                            
+                    elif button_id == 'add-waypoint-btn':
+                        if x is not None and y is not None and z is not None:
+                            # Store with correct altitude (positive up)
+                            new_wp = {'x': x, 'y': y, 'z': abs(z), 'id': len(waypoints)}
+                            waypoints.append(new_wp)
+                            # Convert to NED for flight controller
+                            wp_array = [np.array([wp['x'], wp['y'], -abs(wp['z'])]) for wp in waypoints]
+                            self.fc.set_waypoints(wp_array)
+                            return dash.no_update, waypoints               
+                    elif button_id == 'clear-waypoints-btn':
+                        waypoints = []
+                        self.fc.set_waypoints([])
+                        return dash.no_update, waypoints
+                    
+                except Exception as e:
+                    logger.error(f"Control callback error: {e}")
                 
                 return dash.no_update, waypoints
             
@@ -599,18 +674,21 @@ if HAS_DASH:
                 if not waypoints:
                     return html.P("No waypoints set", className='text-muted')
                 
-                waypoint_items = []
-                for i, wp in enumerate(waypoints):
-                    waypoint_items.append(
-                        dbc.Card([
-                            dbc.CardBody([
-                                html.P(f"Waypoint {i+1}: N{wp['x']}, E{wp['y']}, Alt{wp['z']}m", 
-                                      className='text-light mb-0')
-                            ])
-                        ], className='mb-2')
-                    )
-                
-                return html.Div(waypoint_items)
+                if HAS_DBC:
+                    waypoint_items = []
+                    for i, wp in enumerate(waypoints):
+                        waypoint_items.append(
+                            dbc.Card([
+                                dbc.CardBody([
+                                    html.P(f"Waypoint {i+1}: N{wp['x']}, E{wp['y']}, Alt{wp['z']}m", 
+                                          className='text-light mb-0')
+                                ])
+                            ], className='mb-2')
+                        )
+                    return html.Div(waypoint_items)
+                else:
+                    return html.Ul([html.Li(f"WP{i+1}: N{wp['x']}, E{wp['y']}, Alt{wp['z']}m") 
+                                   for i, wp in enumerate(waypoints)])
             
             # Altitude setpoint callback
             @self.app.callback(
@@ -703,7 +781,7 @@ if HAS_DASH:
             current_trace = go.Scatter3d(
                 x=[current_pos['x']],
                 y=[current_pos['y']],
-                z=[-current_pos['z']],  # FIXED: Convert to altitude
+                z=[-current_pos['z']],  # Convert to altitude
                 mode='markers',
                 marker=dict(size=8, color='red'),
                 name='Current Position'
@@ -730,4 +808,12 @@ if HAS_DASH:
         def run(self, debug: bool = False, port: int = 8050):
             """Start the enhanced dashboard server"""
             logger.info(f"🚀 Starting Enhanced UAV Dashboard on http://localhost:{port}")
-            self.app.run(debug=debug, port=port, host='0.0.0.0')
+            # CRITICAL: Ensure layout is set before running
+            if self.app.layout is None:
+                logger.error("Dashboard layout is None - cannot start server")
+                return
+                
+            try:
+                self.app.run(debug=debug, port=port, host='0.0.0.0')
+            except Exception as e:
+                logger.error(f"Failed to start dashboard: {e}")

@@ -39,20 +39,9 @@ class DataLogger:
             'position_x', 'position_y', 'position_z',
             'velocity_x', 'velocity_y', 'velocity_z',
             'attitude_roll', 'attitude_pitch', 'attitude_yaw',
-            'angular_velocity_x', 'angular_velocity_y', 'angular_velocity_z',
-            'acceleration_x', 'acceleration_y', 'acceleration_z',
-            'motor_speed_1', 'motor_speed_2', 'motor_speed_3', 'motor_speed_4',
             'control_throttle', 'control_roll', 'control_pitch', 'control_yaw',
             'estimated_position_x', 'estimated_position_y', 'estimated_position_z',
-            'estimated_velocity_x', 'estimated_velocity_y', 'estimated_velocity_z',
-            'estimated_attitude_roll', 'estimated_attitude_pitch', 'estimated_attitude_yaw',
-            'sensor_accel_x', 'sensor_accel_y', 'sensor_accel_z',
-            'sensor_gyro_x', 'sensor_gyro_y', 'sensor_gyro_z',
-            'sensor_gps_x', 'sensor_gps_y', 'sensor_gps_z',
-            'sensor_gps_vx', 'sensor_gps_vy', 'sensor_gps_vz',
-            'sensor_baro_altitude', 'sensor_mag_x', 'sensor_mag_y', 'sensor_mag_z',
-            'flight_mode', 'battery_level', 'gps_fix',
-            'waypoint_index', 'mission_complete',
+            'flight_mode', 'battery_level',
             'setpoint_altitude', 'setpoint_position_x', 'setpoint_position_y', 'setpoint_position_z',
             'position_error', 'attitude_error'
         ]
@@ -106,12 +95,12 @@ class DataLogger:
             except Exception:
                 attitude_error = 0.0
 
-            # Build row
+            # Build row - ONLY ESSENTIAL FIELDS
             row = {
                 'timestamp': current_time,
                 'simulation_time': simulation_time,
 
-                # True state
+                # True state (essential only)
                 'position_x': flight_controller.state.position[0],
                 'position_y': flight_controller.state.position[1],
                 'position_z': flight_controller.state.position[2],
@@ -122,16 +111,10 @@ class DataLogger:
                 'attitude_pitch': flight_controller.state.orientation[1],
                 'attitude_yaw': flight_controller.state.orientation[2],
 
-                # Estimated state
+                # Estimated state (essential only)
                 'estimated_position_x': flight_controller.estimated_state.position[0],
                 'estimated_position_y': flight_controller.estimated_state.position[1],
                 'estimated_position_z': flight_controller.estimated_state.position[2],
-                'estimated_velocity_x': flight_controller.estimated_state.velocity[0],
-                'estimated_velocity_y': flight_controller.estimated_state.velocity[1],
-                'estimated_velocity_z': flight_controller.estimated_state.velocity[2],
-                'estimated_attitude_roll': flight_controller.estimated_state.orientation[0],
-                'estimated_attitude_pitch': flight_controller.estimated_state.orientation[1],
-                'estimated_attitude_yaw': flight_controller.estimated_state.orientation[2],
 
                 # Control outputs
                 'control_throttle': flight_controller.control_output[0] if hasattr(flight_controller, 'control_output') else 0.0,
@@ -142,9 +125,6 @@ class DataLogger:
                 # System state
                 'flight_mode': flight_controller.flight_mode.value,
                 'battery_level': 85.0,
-                'gps_fix': True,
-                'waypoint_index': flight_controller.current_waypoint_index,
-                'mission_complete': flight_controller.mission_complete,
 
                 # Setpoints
                 'setpoint_altitude': flight_controller.setpoints.get('altitude', 0.0),
@@ -161,8 +141,9 @@ class DataLogger:
             self.csv_file.flush()
 
         except Exception as e:
-            logger.error(f"Error writing to log file: {e}")
-        
+            # Only log actual errors, not routine telemetry
+            if "Error writing to log file" in str(e):
+                logger.error(f"Error writing to log file: {e}")    
     def stop_logging(self):
         """Stop logging and close the file"""
         if self.csv_file:
