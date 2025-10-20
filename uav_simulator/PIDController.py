@@ -20,7 +20,7 @@ if HAS_TORCH:
 
 class PIDController:
     def __init__(self, kp: float, ki: float, kd: float, 
-                 output_limits: Tuple[float, float] = (-0.5, 0.5)):  # Tighter limits
+                 output_limits: Tuple[float, float] = (-0.5, 0.5)):
         self.kp = kp
         self.ki = ki
         self.kd = kd
@@ -29,9 +29,13 @@ class PIDController:
         # Even tighter integral limits
         self.integral_limit = abs(output_limits[1] - output_limits[0]) * 0.2
 
-            # FIXED: More derivative filtering for smoothness
+        # FIXED: More derivative filtering for smoothness
         self.derivative_filter_alpha = 0.02  # More filtering
         
+        # CRITICAL FIX: Initialize these state variables HERE in __init__
+        self.integral = 0.0
+        self.prev_error = 0.0
+        self.prev_derivative = 0.0
         self.was_saturated = False
         
     def compute(self, setpoint: float, measurement: float, dt: float) -> float:
