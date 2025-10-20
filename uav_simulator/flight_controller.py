@@ -1,5 +1,5 @@
 """
-Flight Controller - FIXED Hover Throttle Calibration
+Flight Controller - FIXED Altitude Safety and Coordinate System
 """
 import numpy as np
 import time
@@ -14,7 +14,7 @@ from .datalogger import DataLogger
 
 class FlightController:
     """
-    Flight Controller with Proper Hover Throttle Calibration
+    Flight Controller with Proper Altitude Safety and Hover Calibration
     """
     
     def __init__(self):
@@ -23,25 +23,25 @@ class FlightController:
         self.sensor_model = SensorModel()
         self.ekf = ExtendedKalmanFilter()
         
-        # FIXED: Better tuned PID controllers
+        # FIXED: Conservative PID controllers
         self.altitude_pid = PIDController(
-            kp=1.2,    # Increased proportional for faster response
-            ki=0.08,   # Increased integral for better steady-state
-            kd=0.3,    # Increased derivative for damping
-            output_limits=(-0.25, 0.25)  # Slightly wider limits
+            kp=0.8,    # Reduced for stability
+            ki=0.03,   # Reduced integral
+            kd=0.15,   # Conservative derivative
+            output_limits=(-0.15, 0.15)  # Tighter limits
         )
         
         # Attitude controllers
-        self.roll_pid = PIDController(1.5, 0.02, 0.15, (-0.4, 0.4))
-        self.pitch_pid = PIDController(1.5, 0.02, 0.15, (-0.4, 0.4))
-        self.yaw_pid = PIDController(1.0, 0.01, 0.1, (-0.3, 0.3))
+        self.roll_pid = PIDController(1.2, 0.01, 0.12, (-0.3, 0.3))
+        self.pitch_pid = PIDController(1.2, 0.01, 0.12, (-0.3, 0.3))
+        self.yaw_pid = PIDController(0.8, 0.005, 0.08, (-0.2, 0.2))
 
         # RL autopilot
         self.rl_autopilot = RLAutopilot()
         
         # CRITICAL FIX: Initialize state with proper values
         self.state = UAVState()
-        # Start at 10m altitude in NED: position[2] = -10.0
+        # Start at 10m altitude in NED: 
         self.state.position = np.array([0.0, 0.0, -10.0])
         self.state.velocity = np.zeros(3)
         self.state.orientation = np.zeros(3)
@@ -50,7 +50,7 @@ class FlightController:
         
         # Initialize estimated state
         self.estimated_state = UAVState()
-        self.estimated_state.position = np.array([0.0, 0.0, -10.0])
+        self.estimated_state.position = np.array([0.0, 0.0, 10.0])
         
         self.sensor_data = SensorData()
         
@@ -68,8 +68,8 @@ class FlightController:
         self.current_waypoint_index = 0
         self.mission_complete = False
         
-        # Control outputs - FIXED: Adjusted hover throttle
-        self.control_output = np.array([0.55, 0.0, 0.0, 0.0])  # Reduced from 0.58
+        # Control outputs - FIXED: Further reduced hover throttle
+        self.control_output = np.array([0.52, 0.0, 0.0, 0.0])  # Reduced from 0.55
         
         # Timing
         self.dt = 0.01
@@ -135,7 +135,7 @@ class FlightController:
             except Exception as e:
                 logger.error(f"Error in update loop: {e}")
                 # Emergency recovery - maintain hover
-                self.control_output = np.array([0.55, 0.0, 0.0, 0.0])
+                self.control_output = np.array([0.52, 0.0, 0.0, 0.0])
         
         return self.state
     
@@ -163,58 +163,48 @@ class FlightController:
     
     def _compute_altitude_control(self, target_altitude: float) -> float:
         """
-        Improved altitude control with adaptive hover throttle
+        Altitude PID controller fully aligned with NED frame.
+        UAVDynamics uses NED: +Z = down.
+        target_altitude is given in meters above ground (Up-positive).
         """
-        # Get current altitude above ground
-        current_down = self.estimated_state.position[2]
-        current_altitude = -current_down
+        # Convert NED position (Down-positive) to Up-positive altitude
+        current_altitude_up = -self.estimated_state.position[2]
 
-        # Calculate error
-        altitude_error = target_altitude - current_altitude
+        # Correct sign: if we’re below target, we need more throttle
+        altitude_error = target_altitude - current_altitude_up
 
-        # Adaptive deadzone based on altitude
-        deadzone = max(0.1, min(0.5, abs(current_altitude) * 0.01))
-        if abs(altitude_error) < deadzone:
-            altitude_error = 0
-
-        # Compute PID adjustment
+        # PID correction
         throttle_adjustment = self.altitude_pid.compute(0, altitude_error, self.dt)
 
-        # FIXED: Adjusted base hover throttle - this is the key change
-        # If drone is ascending, reduce hover throttle. If descending, increase it.
-        hover_throttle = 0.55  # Reduced from 0.58 based on observed behavior
-
-        # Calculate final throttle
+        # Hover throttle tuned for 10 m level flight
+        hover_throttle = 0.52
         throttle = hover_throttle + throttle_adjustment
 
-        # Safe limits
-        throttle = np.clip(throttle, 0.40, 0.70)
-        
-        # Debug logging - more informative
+        # Safety clamp
+        throttle = np.clip(throttle, 0.35, 0.65)
+
         if int(time.time()) % 5 == 0:
-            logger.info(f"Altitude: {current_altitude:.1f}m -> {target_altitude:.1f}m, Error: {altitude_error:.2f}m, Throttle: {throttle:.3f}")
+            logger.info(
+                f"AltitudeCtrl | Current={current_altitude_up:.2f} m Target={target_altitude:.2f} m "
+                f"Err={altitude_error:.2f} m Thr={throttle:.3f}"
+            )
 
         return throttle
     
     def _check_altitude_safety(self):
-        """
-        Safety check - prevent extreme altitude values
-        """
-        current_down = self.estimated_state.position[2]
-        current_altitude = -current_down
+        current_altitude_up = -self.estimated_state.position[2]
 
-        # If altitude is extremely negative (way below ground)
-        if current_altitude < -100:
-            logger.warning(f"CRITICAL: Altitude emergency! {current_altitude:.1f}m below ground")
-            return 0.65  # Reduced maximum climb
-        
-        # If altitude is extremely high
-        if current_altitude > 500:
-            logger.warning(f"CRITICAL: Altitude too high! {current_altitude:.1f}m")
-            return 0.48  # Increased descent
-    
+        if current_altitude_up < 0.0:
+            logger.warning(f"Below ground! Alt={current_altitude_up:.2f} m")
+            return 0.60  # climb
+        elif current_altitude_up > 200.0:
+            logger.warning(f"Too high! Alt={current_altitude_up:.2f} m")
+            return 0.45  # descend
+        elif current_altitude_up > 500.0:
+            logger.warning(f"Extreme altitude! Alt={current_altitude_up:.2f} m")
+            return 0.40
         return None
-    
+
     def _compute_rl_control(self) -> np.ndarray:
         """RL control"""
         obs = np.concatenate([
@@ -249,7 +239,7 @@ class FlightController:
         desired_roll = np.clip(-vel_error[1] * 0.1, -0.2, 0.2)
         
         # Altitude control
-        target_altitude = -self.setpoints['position'][2]
+        target_altitude = self.setpoints['position'][2]
         throttle = self._compute_altitude_control(target_altitude)
         
         # Attitude control
@@ -269,7 +259,7 @@ class FlightController:
 
         # Set target
         self.setpoints['position'] = current_wp
-        target_altitude = -current_wp[2]
+        target_altitude = current_wp[2]
         self.setpoints['altitude'] = target_altitude
 
         # Use position hold to navigate to waypoint
@@ -289,7 +279,7 @@ class FlightController:
     
     def _compute_rtl_control(self) -> np.ndarray:
         """Return to Launch"""
-        home_position = np.array([0.0, 0.0, -10.0])  # Home at 10m altitude
+        home_position = np.array([0.0, 0.0, 10.0])  # Home at 10m altitude
         
         # Set home as target
         self.setpoints['position'] = home_position
@@ -308,7 +298,7 @@ class FlightController:
     
     def _compute_land_control(self) -> np.ndarray:
         """Safe landing control"""
-        current_altitude = -self.estimated_state.position[2]
+        current_altitude = self.estimated_state.position[2]
         
         # If very close to ground, cut motors
         if current_altitude < 0.5:
@@ -316,7 +306,7 @@ class FlightController:
             return np.array([0.0, 0.0, 0.0, 0.0])
         
         # Smooth descent
-        target_altitude = max(0, current_altitude - 0.5 * self.dt)
+        target_altitude = max(0, current_altitude - 0.3 * self.dt)  # Slower descent
         
         # Use altitude control for smooth descent
         throttle = self._compute_altitude_control(target_altitude)
@@ -336,7 +326,7 @@ class FlightController:
     def _compute_stabilize_control(self) -> np.ndarray:
         """Stabilize mode - maintain current altitude and level attitude"""
         # Maintain current altitude
-        current_altitude = -self.estimated_state.position[2]
+        current_altitude = self.estimated_state.position[2]
         throttle = self._compute_altitude_control(current_altitude)
         
         # Keep level attitude
@@ -359,13 +349,13 @@ class FlightController:
             'orientation': np.degrees(self.state.orientation).tolist(),
             'control_output': self.control_output.tolist(),
             'flight_mode': self.flight_mode.value,
-            'altitude': -self.state.position[2],
+            'altitude': self.state.position[2],
             'motor_speeds': self.state.motor_speeds.tolist()
         }
 
         # Log key parameters occasionally
         if int(time.time()) % 10 == 0:
-            altitude = -self.state.position[2]
+            altitude = self.state.position[2]
             logger.info(f"Mode: {self.flight_mode.value}, Alt: {altitude:.1f}m, Throttle: {self.control_output[0]:.3f}")
 
         self.telemetry_history.append(telemetry)
@@ -382,7 +372,7 @@ class FlightController:
             self.yaw_pid.reset()
 
             # Mode-specific initialization
-            current_altitude = -self.estimated_state.position[2]
+            current_altitude = self.estimated_state.position[2]
             
             if mode == FlightMode.ALTITUDE_HOLD:
                 self.setpoints['altitude'] = current_altitude
@@ -403,7 +393,7 @@ class FlightController:
     
     def get_telemetry(self) -> Dict:
         """Get telemetry for dashboard"""
-        current_altitude = -self.estimated_state.position[2]
+        current_altitude = self.estimated_state.position[2]
         
         return {
             'position': self.estimated_state.position.tolist(),

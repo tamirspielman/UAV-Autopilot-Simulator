@@ -106,7 +106,7 @@ class ExtendedKalmanFilter:
         self.state = np.zeros(self.state_dim)
         
         # Initialize with reasonable values
-        self.state[2] = -10.0  # Start at 10m altitude
+        self.state[2] = 10.0  # Start at 10m altitude
         
         # Covariance matrix
         self.P = np.eye(self.state_dim) * 0.1

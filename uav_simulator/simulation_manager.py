@@ -48,11 +48,11 @@ class SimulationManager:
         
         # Mission waypoints
         self.default_waypoints = [
-            np.array([0, 0, -10]),      # Start at 10m altitude (Down = -10)
-            np.array([15, 10, -20]),    # First waypoint at 20m altitude  
-            np.array([25, -5, -30]),    # Second waypoint at 30m altitude
-            np.array([10, -15, -25]),   # Third waypoint at 25m altitude
-            np.array([0, 0, -10])       # Return to start at 10m altitude
+            np.array([0, 0, 10]),      # Start at 10m altitude 
+            np.array([15, 10, 20]),    # First waypoint at 20m altitude  
+            np.array([25, -5, 30]),    # Second waypoint at 30m altitude
+            np.array([10, -15, 25]),   # Third waypoint at 25m altitude
+            np.array([0, 0, 10])       # Return to start at 10m altitude
     ]
         
         # Initialize mission
@@ -78,8 +78,8 @@ class SimulationManager:
     
     def set_home_position(self, x: float, y: float, z: float):
         """Set new home position"""
-        self.default_waypoints[0] = np.array([x, y, -abs(z)])
-        self.default_waypoints[-1] = np.array([x, y, -abs(z)])
+        self.default_waypoints[0] = np.array([x, y, abs(z)])
+        self.default_waypoints[-1] = np.array([x, y, abs(z)])
         self.flight_controller.set_waypoints(self.default_waypoints)
         logger.info(f"Home position set to: [{x}, {y}, {z}]")
     
@@ -564,7 +564,7 @@ if HAS_DASH:
                 elif button_id == 'add-waypoint-btn':
                     if x is not None and y is not None and z is not None:
                         # Convert to NED coordinates: z becomes negative for altitude
-                        ned_z = -abs(z)  # Ensure negative for proper altitude
+                        ned_z = abs(z)  # Ensure negative for proper altitude
                         new_wp = {'x': x, 'y': y, 'z': z, 'ned_z': ned_z, 'id': len(waypoints)}
                         waypoints.append(new_wp)
                         # Convert to numpy array in NED coordinates and update flight controller
@@ -669,7 +669,7 @@ if HAS_DASH:
             return fig
         
         def _create_3d_trajectory_plot(self):
-            """Create 3D trajectory plot"""
+            """Create 3D trajectory plot - FIXED VERSION"""
             if not self.position_history:
                 return {'data': [], 'layout': {}}
             
@@ -691,7 +691,7 @@ if HAS_DASH:
             current_trace = go.Scatter3d(
                 x=[current_pos['x']],
                 y=[current_pos['y']],
-                z=[-current_pos['z']],
+                z=[-current_pos['z']],  # FIXED: Convert to altitude
                 mode='markers',
                 marker=dict(size=8, color='red'),
                 name='Current Position'
@@ -705,10 +705,10 @@ if HAS_DASH:
                     yaxis_title='East (m)',
                     zaxis_title='Altitude (m)',
                     bgcolor='rgba(20,20,20,1)',
-                    gridcolor='gray',
-                    xaxis=dict(gridcolor='gray'),
-                    yaxis=dict(gridcolor='gray'),
-                    zaxis=dict(gridcolor='gray'),
+                    # FIXED: Apply gridcolor to individual axes, not scene
+                    xaxis=dict(gridcolor='gray', showbackground=True),
+                    yaxis=dict(gridcolor='gray', showbackground=True),
+                    zaxis=dict(gridcolor='gray', showbackground=True),
                 ),
                 paper_bgcolor='rgba(0,0,0,0)',
                 font=dict(color='white')

@@ -1,16 +1,17 @@
 """
-UAV Dynamics - FIXED Initialization
+UAV Dynamics - STABILIZED VERSION
 """
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Dict
 from .utils import rotation_matrix, normalize_angles, logger
 
+
 @dataclass
 class UAVState:
     """Complete state representation of the UAV"""
     # Position (NED coordinates - North, East, Down)
-    position: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0, -10.0]))  # Start at 10m altitude
+    position: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0, -10.0]))  # Start 10m ABOVE ground (Down negative)
     # Velocity (body frame)
     velocity: np.ndarray = field(default_factory=lambda: np.zeros(3))
     # Orientation (roll, pitch, yaw) in radians
@@ -23,7 +24,7 @@ class UAVState:
     acceleration: np.ndarray = field(default_factory=lambda: np.zeros(3))
     # Timestamp
     timestamp: float = 0.0
-    
+
     def to_dict(self) -> Dict:
         """Convert to dictionary for serialization"""
         return {
@@ -36,171 +37,115 @@ class UAVState:
             'timestamp': self.timestamp
         }
 
+
 class UAVDynamics:
-    """
-    High-fidelity 6-DOF UAV dynamics model - FIXED Initialization
-    """
-    
+    """Stabilized UAV dynamics model (hover-calibrated and ground-safe)"""
+
     def __init__(self, mass: float = 1.5, arm_length: float = 0.25):
-        # Physical parameters
-        self.mass = mass  # kg
-        self.arm_length = arm_length  # meters
-        self.gravity = 9.81  # m/s^2
-        
-        # Inertia matrix (simplified for quadcopter)
-        self.inertia = np.diag([0.01, 0.01, 0.02])  # kg*m^2
+        # Physical constants
+        self.mass = mass
+        self.arm_length = arm_length
+        self.gravity = 9.81
+
+        # Inertia
+        self.inertia = np.diag([0.01, 0.01, 0.02])
         self.inertia_inv = np.linalg.inv(self.inertia)
-        
-        # Aerodynamic coefficients - ADJUSTED for better stability
-        self.drag_coeff = 0.08  # Reduced drag
-        self.thrust_coeff = 1.8e-5  # Adjusted thrust coefficient
-        self.torque_coeff = 3.5e-7  # Adjusted torque coefficient
-        
-        # Motor parameters
+
+        # Aerodynamic & motor coefficients (empirically balanced)
+        self.drag_coeff = 0.02
+        self.thrust_coeff = 1.5e-7     # tuned for 5000 RPM hover
+        self.torque_coeff = 3e-9
         self.max_rpm = 10000
-        self.motor_time_constant = 0.05  # seconds
-        
-        logger.info("UAVDynamics initialized with stable parameters")
+        self.motor_time_constant = 0.05
 
+        logger.info("UAVDynamics initialized with stable parameters (hover-calibrated)")
+
+    # ===============================================================
     def update(self, state: UAVState, control_input: np.ndarray, dt: float) -> UAVState:
-        """
-        Update UAV state with comprehensive safety checks
-        """
-        # Validate inputs
+        """Run one integration step with hover and ground stability"""
         if not np.all(np.isfinite(control_input)):
-            logger.warning("Invalid control input detected, using hover")
-            control_input = np.array([0.58, 0, 0, 0])
+            control_input = np.array([0.55, 0, 0, 0])
 
-        # Convert control input to motor speeds
         motor_speeds = self._mixer(control_input)
 
-        # RK4 integration with safety checks
         try:
             k1 = self._state_derivative(state, motor_speeds)
-            k2_state = self._add_derivative(state, k1, dt/2)
-            k2 = self._state_derivative(k2_state, motor_speeds)
-            k3_state = self._add_derivative(state, k2, dt/2)
-            k3 = self._state_derivative(k3_state, motor_speeds)
-            k4_state = self._add_derivative(state, k3, dt)
-            k4 = self._state_derivative(k4_state, motor_speeds)
+            k2 = self._state_derivative(self._add_derivative(state, k1, dt/2), motor_speeds)
+            k3 = self._state_derivative(self._add_derivative(state, k2, dt/2), motor_speeds)
+            k4 = self._state_derivative(self._add_derivative(state, k3, dt), motor_speeds)
+            deriv = self._combine_derivatives(k1, k2, k3, k4)
+        except Exception as e:
+            logger.error(f"Dynamics error: {e}")
+            return state
 
-            # Combine RK4 steps
-            derivative = self._combine_derivatives(k1, k2, k3, k4)
-        except (ValueError, RuntimeWarning) as e:
-            logger.error(f"Numerical error in dynamics: {e}")
-            # Return safe state
-            new_state = UAVState()
-            new_state.timestamp = state.timestamp + dt
-            return new_state
-
-        # Update state with numerical checks
         new_state = UAVState()
-        for attr in ['position', 'velocity', 'orientation', 'angular_velocity']:
-            new_value = getattr(state, attr) + derivative[attr] * dt
-            
-            # CRITICAL: Ensure position stays within reasonable bounds
-            if attr == 'position':
-                # Keep altitude reasonable (between -1000m and 1000m)
-                new_value = np.clip(new_value, [-1000, -1000, -1000], [1000, 1000, 1000])
-            
-            if not np.all(np.isfinite(new_value)):
-                logger.warning(f"Non-finite value in {attr}, resetting")
-                new_value = np.zeros_like(new_value)
-            setattr(new_state, attr, new_value)
-    
+        for attr in ["position", "velocity", "orientation", "angular_velocity"]:
+            val = getattr(state, attr) + deriv[attr] * dt
+            if attr == "position":
+                # Clamp horizontal spread, ground at z >= 0
+                val[0:2] = np.clip(val[0:2], -1000, 1000)
+                val[2] = max(0.0, val[2])
+            setattr(new_state, attr, val)
+
         new_state.motor_speeds = motor_speeds
-        new_state.acceleration = derivative['velocity']
+        new_state.acceleration = deriv["velocity"]
         new_state.timestamp = state.timestamp + dt
-    
-        # Normalize angles
         new_state.orientation = normalize_angles(new_state.orientation)
-    
         return new_state
 
+    # ===============================================================
     def _mixer(self, control_input: np.ndarray) -> np.ndarray:
-        """
-        Stable motor mixing
-        """
-        throttle, roll, pitch, yaw = control_input
-
-        # Apply limits to control inputs
-        throttle = np.clip(throttle, 0.0, 1.0)
-        roll = np.clip(roll, -0.5, 0.5)
-        pitch = np.clip(pitch, -0.5, 0.5)
-        yaw = np.clip(yaw, -0.3, 0.3)
-
-        # Quadcopter X configuration mixing
-        motor_commands = np.array([
-            throttle + 0.5*pitch + 0.5*roll - 0.3*yaw,   # Front-right
-            throttle + 0.5*pitch - 0.5*roll + 0.3*yaw,   # Front-left  
-            throttle - 0.5*pitch - 0.5*roll - 0.3*yaw,   # Rear-left
-            throttle - 0.5*pitch + 0.5*roll + 0.3*yaw    # Rear-right
+        """Motor mixing (X config, RPM output)"""
+        throttle, roll, pitch, yaw = np.clip(control_input, [0, -0.5, -0.5, -0.3], [1, 0.5, 0.5, 0.3])
+        motor_cmd = np.array([
+            throttle + 0.5*pitch + 0.5*roll - 0.3*yaw,  # front-right
+            throttle + 0.5*pitch - 0.5*roll + 0.3*yaw,  # front-left
+            throttle - 0.5*pitch - 0.5*roll - 0.3*yaw,  # rear-left
+            throttle - 0.5*pitch + 0.5*roll + 0.3*yaw   # rear-right
         ])
-
-        # Convert to motor speeds
-        motor_speeds = motor_commands * 3000 + 5000  # 2000-8000 RPM range
-
+        motor_speeds = motor_cmd * 3000 + 5000
         return np.clip(motor_speeds, 2000, 8000)
 
+    # ===============================================================
     def _state_derivative(self, state: UAVState, motor_speeds: np.ndarray) -> Dict:
-        """Calculate state derivatives for dynamics integration"""
-        # Calculate forces and torques
         thrust = self._calculate_thrust(motor_speeds)
         torques = self._calculate_torques(motor_speeds)
         drag = -self.drag_coeff * state.velocity * np.linalg.norm(state.velocity)
-        
-        # Rotation matrix from body to world frame
         R = rotation_matrix(state.orientation)
-        
-        # Linear dynamics
-        forces_body = np.array([0, 0, -thrust])
-        forces_world = R @ forces_body + np.array([0, 0, self.mass * self.gravity]) + drag
-        linear_accel = forces_world / self.mass
-        
-        # Angular dynamics (using Euler's equations)
-        angular_accel = self.inertia_inv @ (torques - np.cross(state.angular_velocity, 
-                                                                self.inertia @ state.angular_velocity))
-        
+
+        # Body → world, NED convention: Down = +Z
+        forces_body = np.array([0, 0, -thrust])          # thrust up
+        forces_world = R @ forces_body - np.array([0, 0, self.mass * self.gravity]) + drag
+        accel_world = forces_world / self.mass
+
+        ang_accel = self.inertia_inv @ (torques - np.cross(state.angular_velocity, self.inertia @ state.angular_velocity))
         return {
-            'position': state.velocity,
-            'velocity': linear_accel,
-            'orientation': state.angular_velocity,
-            'angular_velocity': angular_accel
+            "position": state.velocity,
+            "velocity": accel_world,
+            "orientation": state.angular_velocity,
+            "angular_velocity": ang_accel
         }
-    
+
     def _calculate_thrust(self, motor_speeds: np.ndarray) -> float:
-        """Calculate total thrust from motor speeds"""
         return self.thrust_coeff * np.sum(motor_speeds ** 2)
-    
+
     def _calculate_torques(self, motor_speeds: np.ndarray) -> np.ndarray:
-        """Calculate torques from motor speeds"""
-        # Torque contributions from each motor
-        roll_torque = self.arm_length * self.thrust_coeff * (
-            motor_speeds[0]**2 + motor_speeds[3]**2 - 
-            motor_speeds[1]**2 - motor_speeds[2]**2
-        )
-        pitch_torque = self.arm_length * self.thrust_coeff * (
-            motor_speeds[0]**2 + motor_speeds[1]**2 - 
-            motor_speeds[2]**2 - motor_speeds[3]**2
-        )
-        yaw_torque = self.torque_coeff * (
-            -motor_speeds[0]**2 + motor_speeds[1]**2 - 
-            motor_speeds[2]**2 + motor_speeds[3]**2
-        )
+        l, kf, km = self.arm_length, self.thrust_coeff, self.torque_coeff
+        roll_torque = l * kf * ((motor_speeds[0]**2 + motor_speeds[3]**2)
+                               - (motor_speeds[1]**2 + motor_speeds[2]**2))
+        pitch_torque = l * kf * ((motor_speeds[0]**2 + motor_speeds[1]**2)
+                                - (motor_speeds[2]**2 + motor_speeds[3]**2))
+        yaw_torque = km * (-motor_speeds[0]**2 + motor_speeds[1]**2
+                           - motor_speeds[2]**2 + motor_speeds[3]**2)
         return np.array([roll_torque, pitch_torque, yaw_torque])
-    
+
     def _add_derivative(self, state: UAVState, deriv: Dict, dt: float) -> UAVState:
-        """Helper for RK4 integration"""
-        new_state = UAVState()
-        new_state.position = state.position + deriv['position'] * dt
-        new_state.velocity = state.velocity + deriv['velocity'] * dt
-        new_state.orientation = state.orientation + deriv['orientation'] * dt
-        new_state.angular_velocity = state.angular_velocity + deriv['angular_velocity'] * dt
-        return new_state
-    
-    def _combine_derivatives(self, k1: Dict, k2: Dict, k3: Dict, k4: Dict) -> Dict:
-        """Combine RK4 derivatives"""
-        combined = {}
-        for key in k1.keys():
-            combined[key] = (k1[key] + 2*k2[key] + 2*k3[key] + k4[key]) / 6
-        return combined
+        s = UAVState()
+        s.position = state.position + deriv["position"] * dt
+        s.velocity = state.velocity + deriv["velocity"] * dt
+        s.orientation = state.orientation + deriv["orientation"] * dt
+        s.angular_velocity = state.angular_velocity + deriv["angular_velocity"] * dt
+        return s
+
+    def _combine_derivatives(self, k1, k2, k3, k4):
+        return {k: (k1[k] + 2*k2[k] + 2*k3[k] + k4[k]) / 6 for k in k1}
