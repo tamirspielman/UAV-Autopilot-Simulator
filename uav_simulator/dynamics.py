@@ -66,8 +66,8 @@ class UAVDynamics:
         self.drag_coeff = 0.02
         
         # Motor/propeller coefficients
-        self.thrust_coeff = 1.8e-7     # Thrust = k_t * omega^2
-        self.torque_coeff = 3e-9       # Torque = k_q * omega^2
+        self.thrust_coeff = 6e-8     # Thrust = k_t * omega^2
+        self.torque_coeff = 1e-9       # Torque = k_q * omega^2
         
         # Motor limits
         self.min_rpm = 2000
@@ -149,58 +149,26 @@ class UAVDynamics:
         return new_state
     
     def _control_to_motors(self, control: np.ndarray) -> np.ndarray:
-        """
-        Convert control inputs to motor speeds
-        
-        Control mixer for X-configuration quadcopter:
-        
-            Front
-          M1    M0
-            \  /
-             \/
-             /\
-            /  \
-          M2    M3
-            Rear
-        
-        Args:
-            control: [throttle, roll, pitch, yaw]
-        
-        Returns:
-            motor_speeds: [M0, M1, M2, M3] in RPM
-        """
         throttle = np.clip(control[0], 0.0, 1.0)
         roll = np.clip(control[1], -0.5, 0.5)
         pitch = np.clip(control[2], -0.5, 0.5)
         yaw = np.clip(control[3], -0.3, 0.3)
         
-        # Mixing matrix for X configuration
-        # Motor positions: 
-        # M0: Front-Right (+pitch, +roll, -yaw)
-        # M1: Front-Left  (+pitch, -roll, +yaw)
-        # M2: Rear-Left   (-pitch, -roll, -yaw)
-        # M3: Rear-Right  (-pitch, +roll, +yaw)
-        
-        m0 = throttle + 0.5*pitch + 0.5*roll - 0.3*yaw
-        m1 = throttle + 0.5*pitch - 0.5*roll + 0.3*yaw
-        m2 = throttle - 0.5*pitch - 0.5*roll - 0.3*yaw
-        m3 = throttle - 0.5*pitch + 0.5*roll + 0.3*yaw
-        
-        # Convert normalized commands to RPM
-        # 0.0 throttle -> min_rpm, 1.0 throttle -> max_rpm
+        m0 = throttle + pitch + roll - yaw
+        m1 = throttle + pitch - roll + yaw
+        m2 = throttle - pitch - roll - yaw
+        m3 = throttle - pitch + roll + yaw
+        # Normalize to avoid exceeding limits
+        motor_commands = np.array([m0, m1, m2, m3])
+        max_cmd = np.max(np.abs(motor_commands))
+        if max_cmd > 1.0:
+            motor_commands = motor_commands / max_cmd
+    
+        # Convert to RPM
         rpm_range = self.max_rpm - self.min_rpm
-        
-        motor_speeds = np.array([
-            m0 * rpm_range + self.min_rpm,
-            m1 * rpm_range + self.min_rpm,
-            m2 * rpm_range + self.min_rpm,
-            m3 * rpm_range + self.min_rpm
-        ])
-        
-        # Clamp to physical limits
-        motor_speeds = np.clip(motor_speeds, self.min_rpm, self.max_rpm)
-        
-        return motor_speeds
+        motor_speeds = motor_commands * rpm_range + self.min_rpm
+    
+        return np.clip(motor_speeds, self.min_rpm, self.max_rpm)
     
     def _state_derivative(self, state: UAVState, motor_speeds: np.ndarray) -> Dict:
         """

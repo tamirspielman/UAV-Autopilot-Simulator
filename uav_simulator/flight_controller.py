@@ -27,10 +27,10 @@ class FlightController:
         
         # Conservative PID tuning
         self.altitude_pid = PIDController(
-            kp=0.8,    # Moderate proportional
-            ki=0.02,   # Small integral  
-            kd=0.4,    # Good damping
-            output_limits=(-0.15, 0.15)
+            kp=0.6,    # Moderate proportional
+            ki=0.01,   # Small integral  
+            kd=0.3,    # Good damping
+            output_limits=(-0.1, 0.1)
         )
         
         # Attitude controllers
@@ -170,21 +170,26 @@ class FlightController:
         current_altitude = -self.estimated_state.position[2]
         target_altitude = self.setpoints['altitude']
 
-        # This should use your PID controller
+        # ALTITUDE CONTROL
         throttle_adjustment = self.altitude_pid.compute(
             setpoint=target_altitude,
             measurement=current_altitude,
             dt=self.dt
         )
-    
+
         throttle = self.hover_throttle + throttle_adjustment
-        throttle = np.clip(throttle, 0.45, 0.65)  # Critical: not 0.85!
-    
-        # Level attitude
-        roll = self.roll_pid.compute(0.0, self.estimated_state.orientation[0], self.dt)
-        pitch = self.roll_pid.compute(0.0, self.estimated_state.orientation[1], self.dt)  
+        throttle = np.clip(throttle, 0.5, 0.65)
+        current_pos = self.estimated_state.position[:2] 
+        pos_gain = 0.02
+        desired_pitch = -current_pos[0] * pos_gain  
+        desired_roll = current_pos[1] * pos_gain
+        max_tilt = 0.1  
+        desired_pitch = np.clip(desired_pitch, -max_tilt, max_tilt)
+        desired_roll = np.clip(desired_roll, -max_tilt, max_tilt)
+        roll = self.roll_pid.compute(desired_roll, self.estimated_state.orientation[0], self.dt)
+        pitch = self.pitch_pid.compute(desired_pitch, self.estimated_state.orientation[1], self.dt)
         yaw = self.yaw_pid.compute(0.0, self.estimated_state.orientation[2], self.dt)
-    
+
         return np.array([throttle, roll, pitch, yaw])
     def _altitude_hold_mode(self) -> np.ndarray:
         """

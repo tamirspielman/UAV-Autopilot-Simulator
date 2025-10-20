@@ -96,27 +96,23 @@ class SensorModel:
         self.gyro_bias += np.random.randn(3) * self.gyro_bias_instability * np.sqrt(dt)
 
 class ExtendedKalmanFilter:
-    """
-    Extended Kalman Filter for sensor fusion - FIXED VERSION
-    """
-    
     def __init__(self):
         # State vector: [position(3), velocity(3), orientation(3), accel_bias(3), gyro_bias(3)]
         self.state_dim = 15
         self.state = np.zeros(self.state_dim)
         
         # Initialize with reasonable values
-        self.state[2] = 10.0  # Start at 10m altitude
+        self.state[2] = -10.0  # Start at 10m altitude
         
         # Covariance matrix
-        self.P = np.eye(self.state_dim) * 0.1
+        self.P = np.eye(self.state_dim) * 0.01
         
         # Process noise (tuned for UAV)
-        self.Q = np.eye(self.state_dim) * 0.01
+        self.Q = np.eye(self.state_dim) * 0.001
         
         # Measurement noise
-        self.R_gps = np.eye(6) * 1.0
-        self.R_baro = 0.25
+        self.R_gps = np.eye(6) * 0.5
+        self.R_baro = 0.2
         self.R_mag = np.eye(2) * 0.01
         
         self.last_imu_time = None
