@@ -1,16 +1,16 @@
 """
-UAV Dynamics and State Definitions
+UAV Dynamics - FIXED Initialization
 """
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Dict
-from .utils import rotation_matrix, normalize_angles
+from .utils import rotation_matrix, normalize_angles, logger
 
 @dataclass
 class UAVState:
     """Complete state representation of the UAV"""
     # Position (NED coordinates - North, East, Down)
-    position: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    position: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0, -10.0]))  # Start at 10m altitude
     # Velocity (body frame)
     velocity: np.ndarray = field(default_factory=lambda: np.zeros(3))
     # Orientation (roll, pitch, yaw) in radians
@@ -18,7 +18,7 @@ class UAVState:
     # Angular velocity (p, q, r) in rad/s
     angular_velocity: np.ndarray = field(default_factory=lambda: np.zeros(3))
     # Motor speeds (4 motors for quadcopter)
-    motor_speeds: np.ndarray = field(default_factory=lambda: np.zeros(4))
+    motor_speeds: np.ndarray = field(default_factory=lambda: np.array([5000, 5000, 5000, 5000]))  # Near-hover
     # Acceleration
     acceleration: np.ndarray = field(default_factory=lambda: np.zeros(3))
     # Timestamp
@@ -38,7 +38,7 @@ class UAVState:
 
 class UAVDynamics:
     """
-    High-fidelity 6-DOF UAV dynamics model
+    High-fidelity 6-DOF UAV dynamics model - FIXED Initialization
     """
     
     def __init__(self, mass: float = 1.5, arm_length: float = 0.25):
@@ -51,23 +51,25 @@ class UAVDynamics:
         self.inertia = np.diag([0.01, 0.01, 0.02])  # kg*m^2
         self.inertia_inv = np.linalg.inv(self.inertia)
         
-        # Aerodynamic coefficients
-        self.drag_coeff = 0.1
-        self.thrust_coeff = 1.5e-5
-        self.torque_coeff = 3e-7
+        # Aerodynamic coefficients - ADJUSTED for better stability
+        self.drag_coeff = 0.08  # Reduced drag
+        self.thrust_coeff = 1.8e-5  # Adjusted thrust coefficient
+        self.torque_coeff = 3.5e-7  # Adjusted torque coefficient
         
         # Motor parameters
         self.max_rpm = 10000
         self.motor_time_constant = 0.05  # seconds
         
+        logger.info("UAVDynamics initialized with stable parameters")
+
     def update(self, state: UAVState, control_input: np.ndarray, dt: float) -> UAVState:
         """
-        Update UAV state with numerical safety checks
+        Update UAV state with comprehensive safety checks
         """
         # Validate inputs
         if not np.all(np.isfinite(control_input)):
-            logger.warning("Invalid control input detected, using zeros")
-            control_input = np.zeros(4)
+            logger.warning("Invalid control input detected, using hover")
+            control_input = np.array([0.58, 0, 0, 0])
 
         # Convert control input to motor speeds
         motor_speeds = self._mixer(control_input)
@@ -95,6 +97,12 @@ class UAVDynamics:
         new_state = UAVState()
         for attr in ['position', 'velocity', 'orientation', 'angular_velocity']:
             new_value = getattr(state, attr) + derivative[attr] * dt
+            
+            # CRITICAL: Ensure position stays within reasonable bounds
+            if attr == 'position':
+                # Keep altitude reasonable (between -1000m and 1000m)
+                new_value = np.clip(new_value, [-1000, -1000, -1000], [1000, 1000, 1000])
+            
             if not np.all(np.isfinite(new_value)):
                 logger.warning(f"Non-finite value in {attr}, resetting")
                 new_value = np.zeros_like(new_value)
@@ -108,19 +116,20 @@ class UAVDynamics:
         new_state.orientation = normalize_angles(new_state.orientation)
     
         return new_state
+
     def _mixer(self, control_input: np.ndarray) -> np.ndarray:
         """
-        IMPROVED: More stable motor mixing with better scaling
+        Stable motor mixing
         """
         throttle, roll, pitch, yaw = control_input
 
-        # Apply limits to control inputs first
+        # Apply limits to control inputs
         throttle = np.clip(throttle, 0.0, 1.0)
         roll = np.clip(roll, -0.5, 0.5)
         pitch = np.clip(pitch, -0.5, 0.5)
         yaw = np.clip(yaw, -0.3, 0.3)
 
-        # Quadcopter X configuration mixing with gentler scaling
+        # Quadcopter X configuration mixing
         motor_commands = np.array([
             throttle + 0.5*pitch + 0.5*roll - 0.3*yaw,   # Front-right
             throttle + 0.5*pitch - 0.5*roll + 0.3*yaw,   # Front-left  
@@ -128,10 +137,11 @@ class UAVDynamics:
             throttle - 0.5*pitch + 0.5*roll + 0.3*yaw    # Rear-right
         ])
 
-        # Convert to motor speeds with safer scaling
+        # Convert to motor speeds
         motor_speeds = motor_commands * 3000 + 5000  # 2000-8000 RPM range
 
         return np.clip(motor_speeds, 2000, 8000)
+
     def _state_derivative(self, state: UAVState, motor_speeds: np.ndarray) -> Dict:
         """Calculate state derivatives for dynamics integration"""
         # Calculate forces and torques

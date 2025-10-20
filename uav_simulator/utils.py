@@ -20,7 +20,8 @@ class FlightMode(Enum):
     RTL = "return_to_launch"
     LAND = "land"
     AI_PILOT = "ai_pilot"
-
+    TAKEOFF = "takeoff"
+    
 def normalize_angles(angles: np.ndarray) -> np.ndarray:
     """Normalize angles to [-pi, pi]"""
     return np.arctan2(np.sin(angles), np.cos(angles))
