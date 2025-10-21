@@ -335,9 +335,6 @@ class FlightController:
         
         self.telemetry_history.append(telemetry)
         
-        if len(self.telemetry_history) % 100 == 0:
-            logger.info(f"Alt: {current_altitude:.1f}m | Vz: {vertical_velocity:.2f}m/s | Thr: {self.control_output[0]:.3f}")
-    
     def set_flight_mode(self, mode: FlightMode):
         """Change flight mode"""
         if mode == self.flight_mode:
