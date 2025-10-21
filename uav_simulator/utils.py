@@ -1,6 +1,3 @@
-"""
-Utility functions for UAV Autopilot Simulator
-"""
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
 from enum import Enum
@@ -21,7 +18,7 @@ class FlightMode(Enum):
     LAND = "land"
     AI_PILOT = "ai_pilot"
     TAKEOFF = "takeoff"
-    
+
 def normalize_angles(angles: np.ndarray) -> np.ndarray:
     """Normalize angles to [-pi, pi]"""
     return np.arctan2(np.sin(angles), np.cos(angles))
@@ -49,20 +46,6 @@ def rotation_matrix(angles: np.ndarray) -> np.ndarray:
 def check_imports():
     """Check and report available dependencies"""
     imports = {}
-    
-    try:
-        import gymnasium as gym
-        from gymnasium import spaces
-        imports['gymnasium'] = True
-    except ImportError:
-        try:
-            import gym
-            from gym import spaces
-            imports['gym'] = True
-            logger.warning("Using legacy Gym. Consider upgrading to Gymnasium.")
-        except ImportError:
-            imports['gym'] = False
-            logger.warning("No Gym installation found. RL features will be limited.")
     
     try:
         import torch

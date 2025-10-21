@@ -341,7 +341,6 @@ class FlightController:
         return np.array([throttle, roll, pitch, yaw])
     
     def launch(self, target_altitude: float = 5.0):
-        """FIXED: Launch that actually works"""
         if self.is_launched:
             logger.warning("Already launched!")
             return

@@ -2,7 +2,6 @@
 Main Demo Script for UAV Simulator with New Flight Modes
 Run this file to start the simulator
 """
-
 from uav_simulator.simulation_manager import SimulationManager
 from uav_simulator.utils import logger
 
