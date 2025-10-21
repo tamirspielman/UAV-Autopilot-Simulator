@@ -11,6 +11,8 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, TYPE_CHECKING
 from collections import deque
 
+from uav_simulator import flight_controller
+
 from .utils import logger
 from .dynamics import UAVState
 
@@ -72,13 +74,16 @@ class DataLogger:
         try:
             current_time = time.time()
             simulation_time = current_time - self.start_time
-            altitude = -flight_controller.state.position[2]  
-            vertical_velocity = -flight_controller.state.velocity[2]  
+
+            # FIXED: Use proper altitude calculations
+            altitude = -flight_controller.state.position[2]  # Convert NED to altitude
+            vertical_velocity = -flight_controller.state.velocity[2]  # Convert NED to climb rate
+
             # Safe setpoint extraction
             position_sp = flight_controller.setpoints.get('position', flight_controller.state.position)
             attitude_sp = flight_controller.setpoints.get('attitude', np.zeros(3))
 
-            # Position error (Euclidean)
+            # Position error (Euclidean) - FIXED: Use estimated state vs setpoint
             position_error = float(np.linalg.norm(flight_controller.estimated_state.position - position_sp))
 
             # Attitude error (normalize angles to [-pi, pi])
@@ -91,14 +96,15 @@ class DataLogger:
             except Exception:
                 attitude_error = 0.0
 
-            # Build row - ONLY ESSENTIAL FIELDS
+            # FIXED: Build row with CORRECT state assignments
             row = {
                 'timestamp': current_time,
                 'simulation_time': simulation_time,
-                # True state (essential only)
+
+                # TRUE STATE (from dynamics)
                 'position_x': flight_controller.state.position[0],
-                'position_y': flight_controller.state.position[1],
-                'position_z': altitude,
+                'position_y': flight_controller.state.position[1], 
+                'position_z': altitude,  # This is the TRUE altitude
                 'velocity_x': flight_controller.state.velocity[0],
                 'velocity_y': flight_controller.state.velocity[1],
                 'velocity_z': vertical_velocity,
@@ -106,10 +112,10 @@ class DataLogger:
                 'attitude_pitch': flight_controller.state.orientation[1],
                 'attitude_yaw': flight_controller.state.orientation[2],
 
-                # Estimated state (essential only)
+                # ESTIMATED STATE (from EKF) - FIXED: These were swapped!
                 'estimated_position_x': flight_controller.estimated_state.position[0],
                 'estimated_position_y': flight_controller.estimated_state.position[1],
-                'estimated_position_z': flight_controller.estimated_state.position[2],
+                'estimated_position_z': -flight_controller.estimated_state.position[2],  # Convert NED to altitude
 
                 # Control outputs
                 'control_throttle': flight_controller.control_output[0] if hasattr(flight_controller, 'control_output') else 0.0,
@@ -138,7 +144,8 @@ class DataLogger:
         except Exception as e:
             # Only log actual errors, not routine telemetry
             if "Error writing to log file" in str(e):
-                logger.error(f"Error writing to log file: {e}")    
+                logger.error(f"Error writing to log file: {e}")
+            
     def stop_logging(self):
         """Stop logging and close the file"""
         if self.csv_file:

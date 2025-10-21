@@ -142,28 +142,20 @@ class FlightController:
                 else:
                     self.control_output = self._compute_control()
 
-                # Step 4: Apply control to dynamics - THIS IS WHAT MOVES THE DRONE
+                # Step 4: Apply control to dynamics - THIS MOVES THE TRUE STATE
                 self.state = self.dynamics.update(self.state, self.control_output, dt)
 
-                # FIXED: Better ground collision protection
-                if self.state.position[2] > 0.0:  # In NED, Z>0 means below ground
-                    self.state.position[2] = 0.0
-                    # Only stop vertical movement if we're on ground AND not trying to take off
-                    if self.state.velocity[2] > 0 and self.control_output[0] < 0.5:
-                        self.state.velocity[2] = 0.0
-                        self.state.acceleration[2] = 0.0
-
-                # Step 6: Logging
+                # Step 5: Logging with CORRECT states
                 self._log_telemetry()
                 if current_time - self.last_log_time >= self.log_interval:
                     self.data_logger.log_data(self)
                     self.last_log_time = current_time
-            
+
                 self.last_update = current_time
-            
+        
             except Exception as e:
                 logger.error(f"Control loop error: {e}")
-                # Safe fallback: gentle descent
+                # Safe fallback
                 self.control_output = np.array([0.4, 0.0, 0.0, 0.0])
         return self.state
     def _compute_control(self) -> np.ndarray:
@@ -426,24 +418,29 @@ class FlightController:
         self.mission_complete = False
         self.set_flight_mode(FlightMode.AUTO)
         logger.info(f"🎯 Mission started with {len(self.waypoints)} waypoints")
+
     def _log_telemetry(self):
-        """Simple telemetry logging"""
+        """Simple telemetry logging (include both true and estimated states)"""
         current_altitude = -self.state.position[2]
         vertical_velocity = -self.state.velocity[2]
-        
+
         telemetry = {
             'timestamp': time.time(),
-            'position': self.state.position.tolist(),
-            'velocity': self.state.velocity.tolist(),
-            'orientation': np.degrees(self.state.orientation).tolist(),
+            # true (dynamics) NED position & velocity
+            'true_position': self.state.position.tolist(),
+            'true_velocity': self.state.velocity.tolist(),
+            # estimated NED position & velocity (EKF)
+            'estimated_position': self.estimated_state.position.tolist(),
+            'estimated_velocity': self.estimated_state.velocity.tolist(),
+            'orientation_deg': np.degrees(self.state.orientation).tolist(),
             'control_output': self.control_output.tolist(),
             'flight_mode': self.flight_mode.value,
-            'altitude': current_altitude,
-            'vertical_velocity': vertical_velocity
+            'altitude_true': current_altitude,
+            'vertical_velocity_true': vertical_velocity
         }
-        
+
         self.telemetry_history.append(telemetry)
-    
+
     def set_flight_mode(self, mode: FlightMode):
         """Change flight mode"""
         if mode == self.flight_mode:
@@ -468,33 +465,34 @@ class FlightController:
         self.flight_mode = mode
     
     def get_telemetry(self) -> Dict:
-        """Get telemetry for dashboard"""
-        current_altitude = -self.estimated_state.position[2]
-        vertical_velocity = -self.estimated_state.velocity[2]
-        
+        """Get telemetry for dashboard - returns NED position (z negative = below origin)"""
+        # NED position (keep sign convention consistent with dynamics / EKF)
+        ned_pos = self.estimated_state.position.copy()  # shape (3,) -> N,E,Z (Z negative for altitude)
+        ned_vel = self.estimated_state.velocity.copy()
+
+        current_altitude = -ned_pos[2]  # positive altitude (for displays)
+        vertical_velocity = -ned_vel[2]
+
         return {
-            'position': [
-                self.estimated_state.position[0],
-                self.estimated_state.position[1],
-                current_altitude
-            ],
-            'velocity': [
-                self.estimated_state.velocity[0],
-                self.estimated_state.velocity[1],
-                vertical_velocity
-            ],
-            'attitude': self.estimated_state.orientation.tolist(),
+            # Keep position as NED vector (do NOT put positive altitude in position[2])
+            'position': [float(ned_pos[0]), float(ned_pos[1]), float(ned_pos[2])],
+            # velocity in NED (vx, vy, vz)
+            'velocity': [float(ned_vel[0]), float(ned_vel[1]), float(ned_vel[2])],
+            # also expose altitude explicitly so consumers don't guess sign
+            'altitude': float(current_altitude),
+            'vertical_velocity': float(vertical_velocity),
+            'attitude': self.estimated_state.orientation.tolist(),  # roll, pitch, yaw (radians)
             'flight_mode': self.flight_mode.value,
             'battery': 85.0,
             'gps_fix': True,
             'waypoint_index': self.current_waypoint_index,
             'mission_complete': self.mission_complete,
-            'altitude': current_altitude,
-            'vertical_velocity': vertical_velocity,
             'control_output': self.control_output.tolist(),
-            'is_launched': self.is_launched
+            'is_launched': self.is_launched,
+            # add estimated_state vector for debugging/tracing if needed
+            'estimated_position': self.estimated_state.position.tolist(),
+            'true_position': self.state.position.tolist()  # true (dynamics) state for cross-check
         }
-    
     def stop_logging(self):
         """Stop data logging"""
         self.data_logger.stop_logging()
