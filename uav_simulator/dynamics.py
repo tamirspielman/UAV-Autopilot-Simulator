@@ -144,8 +144,6 @@ class UAVDynamics:
             # Stop downward velocity
             if new_state.velocity[2] > 0:
                 new_state.velocity[2] = 0.0
-            logger.warning("⚠️ Ground collision prevented")
-        
         return new_state
     
     def _control_to_motors(self, control: np.ndarray) -> np.ndarray:

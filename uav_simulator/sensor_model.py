@@ -95,14 +95,23 @@ class SensorModel:
         self.accel_bias += np.random.randn(3) * self.accel_bias_instability * np.sqrt(dt)
         self.gyro_bias += np.random.randn(3) * self.gyro_bias_instability * np.sqrt(dt)
 
+"""
+Extended Kalman Filter - FIXED to start at ground level
+"""
+import numpy as np
+from .dynamics import UAVState
+from .sensor_model import SensorData
+from .utils import rotation_matrix, normalize_angles, wrap_angle
+
+
 class ExtendedKalmanFilter:
     def __init__(self):
         # State vector: [position(3), velocity(3), orientation(3), accel_bias(3), gyro_bias(3)]
         self.state_dim = 15
         self.state = np.zeros(self.state_dim)
         
-        # Initialize with reasonable values
-        self.state[2] = -10.0  # Start at 10m altitude
+        # FIXED: Initialize at ground level [0, 0, 0]
+        self.state[2] = 0.0  # Ground level in NED
         
         # Covariance matrix
         self.P = np.eye(self.state_dim) * 0.01
@@ -118,10 +127,10 @@ class ExtendedKalmanFilter:
         self.last_imu_time = None
 
     def predict(self, imu_data: SensorData, dt: float):
-        """Prediction step using IMU data - FIXED"""
+        """Prediction step using IMU data"""
         if dt <= 0:
             return
-            
+        
         # Extract current state
         pos = self.state[:3]
         vel = self.state[3:6]
@@ -136,7 +145,7 @@ class ExtendedKalmanFilter:
         # Rotation matrix from body to world frame
         R = rotation_matrix(orient)
         
-        # State prediction (simplified for stability)
+        # State prediction
         gravity_world = np.array([0, 0, 9.81])
         
         # Position update
@@ -145,7 +154,7 @@ class ExtendedKalmanFilter:
         # Velocity update
         self.state[3:6] += (R @ accel_corrected + gravity_world) * dt
         
-        # Orientation update (simplified)
+        # Orientation update
         self.state[6:9] += gyro_corrected * dt
         
         # Normalize orientation
@@ -156,10 +165,10 @@ class ExtendedKalmanFilter:
         self.P = F @ self.P @ F.T + self.Q
 
     def update_gps(self, gps_data: SensorData):
-        """Update step using GPS measurements - FIXED"""
+        """Update step using GPS measurements"""
         if np.linalg.norm(gps_data.gps_position) < 0.01:
             return
-            
+        
         H = np.zeros((6, self.state_dim))
         H[:3, :3] = np.eye(3)  # Position
         H[3:6, 3:6] = np.eye(3)  # Velocity
@@ -176,7 +185,7 @@ class ExtendedKalmanFilter:
         self.P = (np.eye(self.state_dim) - K @ H) @ self.P
 
     def update_barometer(self, baro_altitude: float):
-        """Update step using barometer - FIXED"""
+        """Update step using barometer"""
         H = np.zeros((1, self.state_dim))
         H[0, 2] = -1  # altitude = -z_position
         
@@ -189,7 +198,7 @@ class ExtendedKalmanFilter:
         self.P = (np.eye(self.state_dim) - np.outer(K, H)) @ self.P
 
     def update_magnetometer(self, mag_data: np.ndarray):
-        """Update step using magnetometer - FIXED"""
+        """Update step using magnetometer"""
         mag_yaw = np.arctan2(mag_data[1], mag_data[0])
         
         H = np.zeros((1, self.state_dim))
