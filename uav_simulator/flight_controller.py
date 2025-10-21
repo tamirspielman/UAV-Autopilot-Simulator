@@ -1,6 +1,7 @@
+# flight_controller.py - FIXED VERSION
 """
-Flight Controller - FIXED VERSION
-Simplified flight modes and proper stabilization
+Flight Controller - STABLE WAYPOINT FOLLOWING
+Proper state initialization and control logic
 """
 import numpy as np
 import time
@@ -16,7 +17,7 @@ from .datalogger import DataLogger
 
 class FlightController:
     """
-    Flight Controller with FIXED stabilization and simplified modes
+    Flight Controller with STABLE waypoint following
     """
     
     def __init__(self):
@@ -25,27 +26,43 @@ class FlightController:
         self.sensor_model = SensorModel()
         self.ekf = ExtendedKalmanFilter()
         
-        # FIXED: Better tuned PID controllers
+        # PROPERLY TUNED PID controllers for smooth flight
         self.altitude_pid = PIDController(
-            kp=0.8,    # Stronger proportional
-            ki=0.05,   # Small integral  
-            kd=0.4,    # Good damping
-            output_limits=(-0.15, 0.15)
+            kp=2.0,    # Stronger altitude control
+            ki=0.2,    # Small integral  
+            kd=1.2,    # Good damping
+            output_limits=(-0.3, 0.3)
         )
-        
-        # Position controllers (for holding position)
-        self.pos_x_pid = PIDController(0.3, 0.01, 0.2, (-0.15, 0.15))
-        self.pos_y_pid = PIDController(0.3, 0.01, 0.2, (-0.15, 0.15))
+        self.state = UAVState()
+        self.state.position = np.array([0.0, 0.0, 0.0])  # Ground level in NED
+        self.state.velocity = np.zeros(3)
+        self.state.orientation = np.zeros(3)
+        self.state.angular_velocity = np.zeros(3)
+        self.state.motor_speeds = np.array([2000.0, 2000.0, 2000.0, 2000.0])
+        self.state.acceleration = np.zeros(3)
+        self.state.timestamp = time.time()
+        self.estimated_state = UAVState()
+        self.estimated_state.position = np.array([0.0, 0.0, 0.0])
+        self.estimated_state.velocity = np.zeros(3)
+        self.estimated_state.orientation = np.zeros(3)
+        self.setpoints = {
+            'altitude': 0.0,  # Ground level
+            'position': np.array([0.0, 0.0, 0.0]),  # Ground position
+            'yaw': 0.0
+        }
+        # Position controllers - CRITICAL FIX: Tune for smooth position control
+        self.pos_x_pid = PIDController(1.2, 0.1, 0.8, (-0.4, 0.4))
+        self.pos_y_pid = PIDController(1.2, 0.1, 0.8, (-0.4, 0.4))
         
         # Attitude controllers
-        self.roll_pid = PIDController(1.2, 0.02, 0.25, (-0.25, 0.25))
-        self.pitch_pid = PIDController(1.2, 0.02, 0.25, (-0.25, 0.25))
-        self.yaw_pid = PIDController(0.8, 0.01, 0.15, (-0.15, 0.15))
+        self.roll_pid = PIDController(2.5, 0.2, 0.6, (-0.5, 0.5))
+        self.pitch_pid = PIDController(2.5, 0.2, 0.6, (-0.5, 0.5))
+        self.yaw_pid = PIDController(1.5, 0.1, 0.3, (-0.3, 0.3))
         
         # Flight mode - start in MANUAL (on ground)
         self.flight_mode = FlightMode.MANUAL
         
-        # FIXED: Initialize state at GROUND LEVEL [0, 0, 0]
+        # FIXED: Proper state initialization at GROUND LEVEL [0, 0, 0]
         self.state = UAVState()
         self.state.position = np.array([0.0, 0.0, 0.0])  # Ground level in NED
         self.state.velocity = np.zeros(3)
@@ -53,9 +70,9 @@ class FlightController:
         self.state.angular_velocity = np.zeros(3)
         self.state.motor_speeds = np.array([2000.0, 2000.0, 2000.0, 2000.0])  # Low RPM
         self.state.acceleration = np.zeros(3)
-        self.state.timestamp = 0.0
+        self.state.timestamp = time.time()
         
-        # Estimated state
+        # Estimated state - also start at ground
         self.estimated_state = UAVState()
         self.estimated_state.position = np.array([0.0, 0.0, 0.0])
         self.estimated_state.velocity = np.zeros(3)
@@ -91,27 +108,26 @@ class FlightController:
         self.data_logger = DataLogger()
         self.data_logger.start_new_log()
         
-        # Hover throttle - will be calibrated
-        self.hover_throttle = 0.52
+        # Hover throttle - calibrated for stable hover
+        self.hover_throttle = 0.62
         
         # Launched flag
         self.is_launched = False
         
-        logger.info("✓ FlightController initialized - FIXED VERSION")
+        # Waypoint acceptance radius (meters)
+        self.waypoint_radius = 2.0
+        
+        logger.info("✓ FlightController initialized - STABLE WAYPOINT VERSION")
     
     def update(self, manual_control: Optional[np.ndarray] = None) -> UAVState:
-        """
-        Main control loop - FIXED
-        """
         current_time = time.time()
         dt = current_time - self.last_update
-        
         if dt >= self.dt:
             try:
-                # Step 1: Get sensor measurements
+                # Step 1: Get sensor measurements from TRUE state
                 self.sensor_data = self.sensor_model.measure(self.state, dt)
                 self.sensor_model.update_biases(dt)
-                
+
                 # Step 2: Estimate state
                 self.ekf.predict(self.sensor_data, dt)
                 if np.linalg.norm(self.sensor_data.gps_position) > 0.01:
@@ -119,39 +135,40 @@ class FlightController:
                 self.ekf.update_barometer(self.sensor_data.barometer_altitude)
                 self.ekf.update_magnetometer(self.sensor_data.magnetometer)
                 self.estimated_state = self.ekf.get_estimated_state()
-                
+
                 # Step 3: Compute control
                 if manual_control is not None and self.flight_mode == FlightMode.MANUAL:
                     self.control_output = manual_control
                 else:
                     self.control_output = self._compute_control()
-                
-                # Step 4: Apply control to dynamics
+
+                # Step 4: Apply control to dynamics - THIS IS WHAT MOVES THE DRONE
                 self.state = self.dynamics.update(self.state, self.control_output, dt)
-                
-                # Step 5: Ground collision protection
-                if self.state.position[2] > 0.0:
+
+                # FIXED: Better ground collision protection
+                if self.state.position[2] > 0.0:  # In NED, Z>0 means below ground
                     self.state.position[2] = 0.0
-                    if self.state.velocity[2] > 0:
+                    # Only stop vertical movement if we're on ground AND not trying to take off
+                    if self.state.velocity[2] > 0 and self.control_output[0] < 0.5:
                         self.state.velocity[2] = 0.0
-                
+                        self.state.acceleration[2] = 0.0
+
                 # Step 6: Logging
                 self._log_telemetry()
                 if current_time - self.last_log_time >= self.log_interval:
                     self.data_logger.log_data(self)
                     self.last_log_time = current_time
-                
+            
                 self.last_update = current_time
-                
+            
             except Exception as e:
                 logger.error(f"Control loop error: {e}")
-                self.control_output = np.array([0.0, 0.0, 0.0, 0.0])
-        
+                # Safe fallback: gentle descent
+                self.control_output = np.array([0.4, 0.0, 0.0, 0.0])
         return self.state
-    
     def _compute_control(self) -> np.ndarray:
         """
-        Simplified control routing - only 3 modes
+        Stable control routing
         """
         if self.flight_mode == FlightMode.MANUAL:
             return np.array([0.0, 0.0, 0.0, 0.0])  # Motors off on ground
@@ -172,43 +189,36 @@ class FlightController:
             return np.array([0.0, 0.0, 0.0, 0.0])
     
     def _stabilize_mode(self) -> np.ndarray:
-        """
-        FIXED: Stabilize at current altitude and hold position
-        """
-        current_altitude = -self.estimated_state.position[2]
+        current_altitude = -self.estimated_state.position[2]  # Convert NED to altitude
         target_altitude = self.setpoints['altitude']
-        
-        # Altitude control
-        throttle_adjustment = self.altitude_pid.compute(
-            setpoint=target_altitude,
-            measurement=current_altitude,
-            dt=self.dt
-        )
-        
-        throttle = self.hover_throttle + throttle_adjustment
-        throttle = np.clip(throttle, 0.3, 0.7)
-        
-        # FIXED: Position hold - use target position instead of zero
-        target_pos = self.setpoints['position'][:2]
-        current_pos = self.estimated_state.position[:2]
-        
+        if target_altitude > 0.1 or current_altitude > 0.1:
+            throttle_adjustment = self.altitude_pid.compute(
+                setpoint=target_altitude,
+                measurement=current_altitude,
+                dt=self.dt
+            )
+            throttle = self.hover_throttle + throttle_adjustment
+            throttle = np.clip(throttle, 0.4, 0.8)
+        else:
+            throttle = 0.0  
+        target_pos = self.setpoints['position']
+        current_pos = self.estimated_state.position
         pos_error = target_pos - current_pos
-        
-        # Convert position error to desired tilt angles
-        # Pitch controls North/South (X), Roll controls East/West (Y)
-        desired_pitch = -self.pos_x_pid.compute(0, pos_error[0], self.dt)
-        desired_roll = self.pos_y_pid.compute(0, pos_error[1], self.dt)
-        
+        # Convert position error to desired tilt angles (gentle)
+        max_tilt_angle = 0.4  # radians (~23 degrees)
+        desired_pitch = np.clip(-self.pos_x_pid.compute(0, pos_error[0], self.dt), 
+                          -max_tilt_angle, max_tilt_angle)
+        desired_roll = np.clip(self.pos_y_pid.compute(0, pos_error[1], self.dt), 
+                          -max_tilt_angle, max_tilt_angle)
         # Attitude control
         roll = self.roll_pid.compute(desired_roll, self.estimated_state.orientation[0], self.dt)
         pitch = self.pitch_pid.compute(desired_pitch, self.estimated_state.orientation[1], self.dt)
         yaw = self.yaw_pid.compute(self.setpoints['yaw'], self.estimated_state.orientation[2], self.dt)
-        
         return np.array([throttle, roll, pitch, yaw])
     
     def _auto_mode(self) -> np.ndarray:
         """
-        AUTO: Follow waypoints in sequence
+        AUTO: Smooth waypoint following
         """
         if not self.waypoints or self.mission_complete:
             # No waypoints, just hold current position
@@ -227,87 +237,60 @@ class FlightController:
         # Check if waypoint reached
         current_pos = self.estimated_state.position
         distance = np.linalg.norm(current_pos - current_wp)
-        
-        if distance < 1.5:  # Within 1.5m of waypoint
+        if distance < self.waypoint_radius:
             if self.current_waypoint_index < len(self.waypoints) - 1:
                 self.current_waypoint_index += 1
                 next_wp = self.waypoints[self.current_waypoint_index]
-                logger.info(f"✓ Waypoint {self.current_waypoint_index} reached, going to next: {next_wp}")
+                logger.info(f"✓ Waypoint {self.current_waypoint_index} reached! Next: N{next_wp[0]:.1f} E{next_wp[1]:.1f} Alt{-next_wp[2]:.1f}m")
             else:
                 self.mission_complete = True
-                logger.info("✓ All waypoints reached!")
-        
+                logger.info("✓ All waypoints reached! Holding position.")
+                # Hold at last waypoint
+                self.setpoints['position'] = current_wp
+                self.setpoints['altitude'] = -current_wp[2]
         return control
     
     def _rtl_mode(self) -> np.ndarray:
         """
-        RTL: Return to Launch - Go to last waypoint, then return to [0,0,0] and land
+        FIXED: Return to Launch - Go to [0,0] at safe altitude, then land at [0,0,0]
         """
         current_pos = self.estimated_state.position
-        
-        # Phase 1: If we have waypoints, go to last waypoint first
-        if self.waypoints and not self.mission_complete:
-            last_wp = self.waypoints[-1]
-            distance_to_last = np.linalg.norm(current_pos - last_wp)
-            
-            if distance_to_last > 1.5:
-                # Still going to last waypoint
-                self.setpoints['position'] = last_wp
-                self.setpoints['altitude'] = -last_wp[2]
-                return self._stabilize_mode()
-            else:
-                # Reached last waypoint
-                self.mission_complete = True
-                logger.info("✓ Reached last waypoint, returning home...")
-        
-        # Phase 2: Return to launch position [0, 0, 0]
-        home = self.launch_position.copy()
-        home[2] = -2.0  # Go to 2m altitude first
-        
-        distance_to_home = np.linalg.norm(current_pos[:2] - home[:2])
-        
-        if distance_to_home > 1.0:
-            # Flying home at 2m
-            self.setpoints['position'] = home
-            self.setpoints['altitude'] = 2.0
+        current_altitude = -current_pos[2]
+    
+        # Define positions
+        home_position_xy = np.array([0.0, 0.0])
+        safe_altitude = 5.0  # meters
+        ground_position = np.array([0.0, 0.0, 0.0])  # Ground level in NED
+    
+        # Calculate horizontal distance to home
+        distance_to_home_xy = np.linalg.norm(current_pos[:2] - home_position_xy)
+
+        if distance_to_home_xy > 3.0 or current_altitude < safe_altitude - 1.0:
+            # Phase 1: Go to home XY position at safe altitude
+            target_position = np.array([0.0, 0.0, -safe_altitude])  # NED coordinates
+            self.setpoints['position'] = target_position
+            self.setpoints['altitude'] = safe_altitude
+            logger.info("🔄 Returning to launch position...")
             return self._stabilize_mode()
         else:
-            # At home position, now land
+            # Phase 2: At home position, now descend to land
             logger.info("✓ Home position reached, landing...")
-            self.setpoints['position'] = self.launch_position
+            self.setpoints['position'] = ground_position
             self.setpoints['altitude'] = 0.0
-            
-            current_altitude = -self.estimated_state.position[2]
+
             if current_altitude < 0.3:
                 logger.info("✓ RTL complete - Landed at launch position")
                 self.flight_mode = FlightMode.MANUAL
-                return np.array([0.0, 0.0, 0.0, 0.0])
-            
+                self.is_launched = False
+                return np.array([0.0, 0.0, 0.0, 0.0])  # Motors off
+
             return self._controlled_descent()
-    
     def _land_mode(self) -> np.ndarray:
         """
-        LAND: Go to last waypoint, then land at current location
+        LAND: Land at current XY position
         """
         current_pos = self.estimated_state.position
-        
-        # Phase 1: If we have waypoints and haven't completed mission, go to last waypoint
-        if self.waypoints and not self.mission_complete:
-            last_wp = self.waypoints[-1]
-            distance_to_last = np.linalg.norm(current_pos - last_wp)
-            
-            if distance_to_last > 1.5:
-                # Still going to last waypoint
-                self.setpoints['position'] = last_wp
-                self.setpoints['altitude'] = -last_wp[2]
-                return self._stabilize_mode()
-            else:
-                # Reached last waypoint
-                self.mission_complete = True
-                logger.info("✓ Reached last waypoint, landing here...")
-        
-        # Phase 2: Land at current XY position
-        current_altitude = -self.estimated_state.position[2]
+        current_altitude = -current_pos[2]
         
         if current_altitude < 0.3:
             logger.info("✓ Landed at current position")
@@ -324,12 +307,22 @@ class FlightController:
     
     def _controlled_descent(self) -> np.ndarray:
         """
-        Controlled descent for landing
+        Smooth controlled descent for landing
         """
         current_altitude = -self.estimated_state.position[2]
         
-        # Slow descent rate
-        descent_rate = 0.5  # m/s
+        if current_altitude < 0.3:
+            # Landed
+            return np.array([0.0, 0.0, 0.0, 0.0])
+        
+        # Progressive descent rate based on altitude
+        if current_altitude > 5.0:
+            descent_rate = 1.0  # m/s
+        elif current_altitude > 2.0:
+            descent_rate = 0.5  # m/s
+        else:
+            descent_rate = 0.2  # m/s (very slow near ground)
+        
         target_altitude = max(0.0, current_altitude - descent_rate * self.dt)
         
         throttle_adjustment = self.altitude_pid.compute(
@@ -341,40 +334,55 @@ class FlightController:
         throttle = self.hover_throttle + throttle_adjustment
         
         # Reduce throttle gradually as we approach ground
+        if current_altitude < 2.0:
+            throttle *= 0.8
         if current_altitude < 1.0:
-            throttle *= 0.7
+            throttle *= 0.6
         
         throttle = np.clip(throttle, 0.2, 0.6)
         
-        # Keep level attitude
+        # Keep level attitude during descent
         roll = self.roll_pid.compute(0.0, self.estimated_state.orientation[0], self.dt)
         pitch = self.pitch_pid.compute(0.0, self.estimated_state.orientation[1], self.dt)
         yaw = self.yaw_pid.compute(0.0, self.estimated_state.orientation[2], self.dt)
         
         return np.array([throttle, roll, pitch, yaw])
     
-    def launch(self, target_altitude: float = 2.0):
-        """
-        Launch sequence - take off to specified altitude
-        """
+    def launch(self, target_altitude: float = 5.0):
+        """FIXED: Launch that actually works"""
         if self.is_launched:
             logger.warning("Already launched!")
             return
-        
+
+        # FIXED: Don't require manual mode to launch
+        if self.flight_mode not in [FlightMode.MANUAL, FlightMode.STABILIZE]:
+            logger.warning(f"Cannot launch from {self.flight_mode.value} mode!")
+            return
+
         # Store launch position
         self.launch_position = self.estimated_state.position.copy()
-        
+
         # Set target altitude and position
         self.setpoints['altitude'] = target_altitude
-        self.setpoints['position'] = np.array([0.0, 0.0, -target_altitude])
+        self.setpoints['position'] = np.array([0.0, 0.0, -target_altitude])  # NED: negative Z = positive altitude
         self.setpoints['yaw'] = 0.0
-        
-        # Switch to stabilize mode
+
+        # Reset PIDs for clean start
+        self.altitude_pid.reset()
+        self.pos_x_pid.reset()
+        self.pos_y_pid.reset()
+        self.roll_pid.reset()
+        self.pitch_pid.reset()
+        self.yaw_pid.reset()
+    
+        # FIXED: Use higher hover throttle for takeoff
+        self.hover_throttle = 0.65  # Increase for takeoff
+    
+        # Switch to stabilize mode for takeoff
         self.set_flight_mode(FlightMode.STABILIZE)
         self.is_launched = True
-        
-        logger.info(f"🚀 Launching to {target_altitude}m altitude!")
     
+        logger.info(f"🚀 Launching to {target_altitude}m altitude!")
     def emergency_land(self):
         """
         EMERGENCY LAND: Immediate landing at current position
@@ -393,16 +401,9 @@ class FlightController:
         self.flight_mode = FlightMode.LAND
     
     def add_waypoint(self, north: float, east: float, altitude: float):
-        """
-        Add waypoint in NED coordinates
-        north: meters north
-        east: meters east  
-        altitude: meters above ground (will be converted to NED -Z)
-        """
         waypoint = np.array([north, east, -abs(altitude)])
         self.waypoints.append(waypoint)
-        logger.info(f"Added waypoint: N{north} E{east} Alt{altitude}m")
-    
+        logger.info(f"📍 Added waypoint: N{north:.1f} E{east:.1f} Alt{altitude:.1f}m")
     def clear_waypoints(self):
         """Clear all waypoints"""
         self.waypoints = []
@@ -416,11 +417,15 @@ class FlightController:
             logger.warning("No waypoints set!")
             return
         
+        if not self.is_launched:
+            logger.warning("Not launched yet! Auto-launching to 5m...")
+            self.launch(5.0)
+            time.sleep(3)  # Let it stabilize
+        
         self.current_waypoint_index = 0
         self.mission_complete = False
         self.set_flight_mode(FlightMode.AUTO)
         logger.info(f"🎯 Mission started with {len(self.waypoints)} waypoints")
-    
     def _log_telemetry(self):
         """Simple telemetry logging"""
         current_altitude = -self.state.position[2]

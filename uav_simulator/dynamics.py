@@ -152,19 +152,16 @@ class UAVDynamics:
         pitch = np.clip(control[2], -0.5, 0.5)
         yaw = np.clip(control[3], -0.3, 0.3)
         
-        m0 = throttle + pitch + roll - yaw
-        m1 = throttle + pitch - roll + yaw
-        m2 = throttle - pitch - roll - yaw
-        m3 = throttle - pitch + roll + yaw
+        m0 = throttle - pitch + roll - yaw  # Front Right
+        m1 = throttle - pitch - roll + yaw  # Front Left  
+        m2 = throttle + pitch - roll - yaw  # Rear Left
+        m3 = throttle + pitch + roll + yaw
         # Normalize to avoid exceeding limits
         motor_commands = np.array([m0, m1, m2, m3])
-        max_cmd = np.max(np.abs(motor_commands))
-        if max_cmd > 1.0:
-            motor_commands = motor_commands / max_cmd
-    
+        motor_commands = np.clip(motor_commands, 0.0, 1.0)
         # Convert to RPM
         rpm_range = self.max_rpm - self.min_rpm
-        motor_speeds = motor_commands * rpm_range + self.min_rpm
+        motor_speeds = self.min_rpm + motor_commands * rpm_range
     
         return np.clip(motor_speeds, self.min_rpm, self.max_rpm)
     
@@ -212,28 +209,10 @@ class UAVDynamics:
         }
     
     def _calculate_thrust(self, motor_speeds: np.ndarray) -> float:
-        """
-        Calculate total thrust from motor speeds
-        
-        Args:
-            motor_speeds: [M0, M1, M2, M3] in RPM
-            
-        Returns:
-            Total thrust force in Newtons
-        """
-        # Thrust = coefficient * sum(RPM^2)
-        return self.thrust_coeff * np.sum(motor_speeds ** 2)
+        motor_rads = motor_speeds * (2 * np.pi / 60)
+        return self.thrust_coeff * np.sum(motor_rads ** 2)
     
     def _calculate_torques(self, motor_speeds: np.ndarray) -> np.ndarray:
-        """
-        Calculate torques from motor speeds (roll, pitch, yaw)
-        
-        Args:
-            motor_speeds: [M0, M1, M2, M3] in RPM
-            
-        Returns:
-            Torque vector [roll, pitch, yaw] in N·m
-        """
         l = self.arm_length
         kf = self.thrust_coeff
         km = self.torque_coeff
