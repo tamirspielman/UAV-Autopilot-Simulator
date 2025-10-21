@@ -1,3 +1,7 @@
+# utils.py
+"""
+Utility functions for UAV Autopilot Simulator
+"""
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
 from enum import Enum
@@ -43,19 +47,23 @@ def rotation_matrix(angles: np.ndarray) -> np.ndarray:
     
     return R
 
-def check_imports():
+def check_imports() -> Dict[str, bool]:
     """Check and report available dependencies"""
-    imports = {}
+    imports: Dict[str, bool] = {}
     
+    # NumPy (required)
+    imports['numpy'] = True
+    
+    # PyTorch (optional)
     try:
         import torch
         import torch.nn as nn
         imports['torch'] = True
     except ImportError:
         imports['torch'] = False
-        logger.warning("PyTorch not installed. RL features will be limited.")
+        logger.info("PyTorch not installed. RL features will be limited.")
     
-    # Visualization imports
+    # Visualization imports (optional)
     try:
         import matplotlib.pyplot as plt
         from matplotlib.animation import FuncAnimation
@@ -82,5 +90,6 @@ def check_imports():
         imports['dbc'] = True
     except ImportError:
         imports['dbc'] = False
+        logger.info("dash_bootstrap_components not available - using basic styling")
     
     return imports

@@ -1,3 +1,4 @@
+# simulation_manager.py
 """
 Simulation Manager - MERGED with Enhanced 3D Visualization & Simplified Controls
 """
@@ -8,7 +9,9 @@ from typing import Dict, List, Optional, Tuple
 from collections import deque
 
 from .utils import logger, check_imports, FlightMode
-from .flight_controller import FlightController
+from .drone import Drone
+from .physics import Physics
+from .controller import Controller
 from .datalogger import DataLogger
 
 # Check for visualization dependencies
@@ -33,12 +36,26 @@ class SimulationManager:
     """
     
     def __init__(self):
-        self.flight_controller = FlightController()
+        # Initialize core components
+        self.drone = Drone()
+        self.physics = Physics()
+        self.controller = Controller()
+        self.data_logger = DataLogger()
+        
+        # Simulation state
+        self.running = False
+        self.simulation_thread = None
+        self.dt = 0.01  # 100Hz update rate
+        
+        # Timing
+        self.last_update = time.time()
+        self.last_log_time = time.time()
+        self.log_interval = 0.1
         
         # Initialize dashboard
         if HAS_DASH and HAS_PLOTLY:
             try:
-                self.dashboard = MergedDashboard(self.flight_controller)
+                self.dashboard = MergedDashboard(self)
                 logger.info("Merged dashboard initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to initialize dashboard: {e}")
@@ -49,10 +66,6 @@ class SimulationManager:
                 logger.warning("Dash not available - dashboard disabled")
             if not HAS_PLOTLY:
                 logger.warning("Plotly not available - dashboard disabled")
-        
-        # Simulation state
-        self.running = False
-        self.simulation_thread = None
         
         logger.info("✓ Simulation Manager initialized")
     
@@ -70,8 +83,33 @@ class SimulationManager:
     def _simulation_loop(self):
         """Main simulation loop"""
         while self.running:
-            self.flight_controller.update()
-            time.sleep(0.01)  # 100Hz update rate
+            current_time = time.time()
+            dt = current_time - self.last_update
+            
+            if dt >= self.dt:
+                try:
+                    # Compute control outputs
+                    control_output = self.controller.compute_control(self.drone, dt)
+                    self.controller.control_output = control_output
+                    
+                    # Update physics
+                    new_state = self.physics.update(self.drone, control_output, dt)
+                    self.drone.true_state = new_state
+                    
+                    # For now, estimated state = true state (no sensor noise)
+                    self.drone.estimated_state = new_state
+                    
+                    # Log data periodically - FIXED: This was missing!
+                    if current_time - self.last_log_time >= self.log_interval:
+                        self.data_logger.log_data(self.drone, self.controller)
+                        self.last_log_time = current_time
+                    
+                    self.last_update = current_time
+                    
+                except Exception as e:
+                    logger.error(f"Simulation loop error: {e}")
+            
+            time.sleep(0.001)
     
     def stop_simulation(self):
         """Stop the simulation"""
@@ -79,7 +117,7 @@ class SimulationManager:
         if self.simulation_thread:
             self.simulation_thread.join(timeout=2.0)
         
-        self.flight_controller.stop_logging()
+        self.data_logger.stop_logging()
         logger.info("Simulation stopped")
     
     def run_with_dashboard(self, port: int = 8050):
@@ -107,7 +145,7 @@ class SimulationManager:
         try:
             while self.running:
                 time.sleep(1)
-                telemetry = self.flight_controller.get_telemetry()
+                telemetry = self.get_telemetry()
                 print(f"Alt: {telemetry['altitude']:.1f}m | "
                       f"Pos: [{telemetry['position'][0]:.1f}, {telemetry['position'][1]:.1f}] | "
                       f"Mode: {telemetry['flight_mode']}")
@@ -115,6 +153,69 @@ class SimulationManager:
             logger.info("Shutting down...")
         finally:
             self.stop_simulation()
+    
+    def get_telemetry(self) -> Dict:
+        """Get telemetry data for dashboard - returns NED position (z negative = below origin)"""
+        drone_telemetry = self.drone.get_telemetry()
+        controller_status = self.controller.get_status()
+        
+        # NED position (keep sign convention consistent with dynamics)
+        ned_pos = self.drone.estimated_state.position.copy()
+        ned_vel = self.drone.estimated_state.velocity.copy()
+
+        current_altitude = -ned_pos[2]  # positive altitude (for displays)
+        vertical_velocity = -ned_vel[2]
+
+        return {
+            # Keep position as NED vector
+            'position': [float(ned_pos[0]), float(ned_pos[1]), float(ned_pos[2])],
+            # velocity in NED (vx, vy, vz)
+            'velocity': [float(ned_vel[0]), float(ned_vel[1]), float(ned_vel[2])],
+            # also expose altitude explicitly so consumers don't guess sign
+            'altitude': float(current_altitude),
+            'vertical_velocity': float(vertical_velocity),
+            'attitude': self.drone.estimated_state.orientation.tolist(),  # roll, pitch, yaw (radians)
+            'flight_mode': controller_status['flight_mode'],
+            'battery': 85.0,
+            'gps_fix': True,
+            'waypoint_index': controller_status['waypoint_index'],
+            'mission_complete': controller_status['mission_complete'],
+            'control_output': controller_status['control_output'],
+            'is_launched': controller_status['is_launched'],
+            # add estimated_state vector for debugging/tracing if needed
+            'estimated_position': self.drone.estimated_state.position.tolist(),
+            'true_position': self.drone.true_state.position.tolist()  # true (dynamics) state for cross-check
+        }
+    
+    # Controller proxy methods for dashboard
+    def launch(self, target_altitude: float = 2.0):
+        """Launch the drone"""
+        self.controller.launch(target_altitude)
+    
+    def add_waypoint(self, north: float, east: float, altitude: float):
+        """Add a waypoint to the mission"""
+        self.controller.add_waypoint(north, east, altitude)
+    
+    def clear_waypoints(self):
+        """Clear all waypoints"""
+        self.controller.clear_waypoints()
+    
+    def start_mission(self):
+        """Start autonomous mission"""
+        self.controller.start_mission()
+    
+    def set_flight_mode(self, mode: FlightMode):
+        """Change flight mode"""
+        self.controller.set_flight_mode(mode)
+    
+    def emergency_land(self):
+        """Emergency landing"""
+        self.controller.emergency_land()
+    
+    @property
+    def waypoints(self):
+        """Get waypoints from controller"""
+        return self.controller.waypoints
 
 
 if HAS_DASH and HAS_PLOTLY:
@@ -123,8 +224,8 @@ if HAS_DASH and HAS_PLOTLY:
         Merged Dashboard with Enhanced 3D Visualization & Simplified Controls
         """
         
-        def __init__(self, flight_controller: FlightController):
-            self.fc = flight_controller
+        def __init__(self, sim_manager: SimulationManager):
+            self.sim = sim_manager
             
             if HAS_DBC:
                 self.app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG])
@@ -300,8 +401,8 @@ if HAS_DASH and HAS_PLOTLY:
             def update_dashboard(n):
                 try:
                     # Get telemetry data
-                    telemetry = self.fc.get_telemetry()
-                    current_altitude = -telemetry['position'][2]  # Convert NED to altitude
+                    telemetry = self.sim.get_telemetry()
+                    current_altitude = telemetry['altitude']
                     
                     # Update data buffers (from old version)
                     current_time = time.time()
@@ -346,7 +447,7 @@ if HAS_DASH and HAS_PLOTLY:
                                     dbc.CardBody([
                                         html.H4("⚡ System", className='text-white'),
                                         html.P(f"Mode: {telemetry['flight_mode']}", className='text-white'),
-                                        html.P(f"Waypoint: {telemetry['waypoint_index'] + 1}/{(len(self.fc.waypoints) if self.fc.waypoints else 0)}", className='text-white'),
+                                        html.P(f"Waypoint: {telemetry['waypoint_index'] + 1}/{(len(self.sim.waypoints) if self.sim.waypoints else 0)}", className='text-white'),
                                         html.P(f"Mission: {'✅ Complete' if telemetry['mission_complete'] else '🟡 Running'}", 
                                               className='text-success' if telemetry['mission_complete'] else 'text-warning')
                                     ], style={'backgroundColor': '#2a2a2a'})
@@ -357,7 +458,7 @@ if HAS_DASH and HAS_PLOTLY:
                         status_display = html.Div([
                             html.P(f"Position: N{telemetry['position'][0]:.1f} E{telemetry['position'][1]:.1f} Alt{current_altitude:.1f}m"),
                             html.P(f"Attitude: Roll{np.degrees(telemetry['attitude'][0]):.1f}° Pitch{np.degrees(telemetry['attitude'][1]):.1f}° Yaw{np.degrees(telemetry['attitude'][2]):.1f}°"),
-                            html.P(f"Mode: {telemetry['flight_mode']} | WP: {telemetry['waypoint_index'] + 1}/{(len(self.fc.waypoints) if self.fc.waypoints else 0)}")
+                            html.P(f"Mode: {telemetry['flight_mode']} | WP: {telemetry['waypoint_index'] + 1}/{(len(self.sim.waypoints) if self.sim.waypoints else 0)}")
                         ])
                     
                     # Create enhanced plots (from old version)
@@ -405,29 +506,29 @@ if HAS_DASH and HAS_PLOTLY:
                 
                 try:
                     if button_id == 'launch-btn':
-                        self.fc.launch(target_altitude=2.0)
+                        self.sim.launch(target_altitude=2.0)
                         logger.info("🚀 Launch button pressed")
                     
                     elif button_id == 'add-wp-btn':
                         if north is not None and east is not None and alt is not None:
-                            self.fc.add_waypoint(north, east, alt)
+                            self.sim.add_waypoint(north, east, alt)
                             waypoints.append({'n': north, 'e': east, 'a': alt})
                     
                     elif button_id == 'clear-wp-btn':
-                        self.fc.clear_waypoints()
+                        self.sim.clear_waypoints()
                         waypoints = []
                     
                     elif button_id == 'mission-btn':
-                        self.fc.start_mission()
+                        self.sim.start_mission()
                     
                     elif button_id == 'rtl-btn':
-                        self.fc.set_flight_mode(FlightMode.RTL)
+                        self.sim.set_flight_mode(FlightMode.RTL)
                     
                     elif button_id == 'land-btn':
-                        self.fc.set_flight_mode(FlightMode.LAND)
+                        self.sim.set_flight_mode(FlightMode.LAND)
                     
                     elif button_id == 'emergency-btn':
-                        self.fc.emergency_land()
+                        self.sim.emergency_land()
                 
                 except Exception as e:
                     logger.error(f"Button handler error: {e}")
@@ -545,11 +646,11 @@ if HAS_DASH and HAS_PLOTLY:
             
             # Add waypoints if available
             waypoints_trace = None
-            if self.fc.waypoints and len(self.fc.waypoints) > 0:
+            if self.sim.waypoints and len(self.sim.waypoints) > 0:
                 waypoints_trace = go.Scatter3d(
-                    x=[wp[0] for wp in self.fc.waypoints],
-                    y=[wp[1] for wp in self.fc.waypoints],
-                    z=[-wp[2] for wp in self.fc.waypoints],  # Convert NED to altitude
+                    x=[wp[0] for wp in self.sim.waypoints],
+                    y=[wp[1] for wp in self.sim.waypoints],
+                    z=[-wp[2] for wp in self.sim.waypoints],  # Convert NED to altitude
                     mode='markers',
                     marker=dict(size=8, color='yellow', symbol='square', line=dict(width=2, color='orange')),
                     name='Waypoints'

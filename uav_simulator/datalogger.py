@@ -1,28 +1,23 @@
+# datalogger.py
 """
-Data Logging and Analysis System
+Data Logger - logs simulation data to files
 """
 import os
 import csv
 import time
-import json
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from typing import Dict, List, Optional, Any, TYPE_CHECKING
+from typing import Dict, List, Optional, Any
 from collections import deque
 
-from uav_simulator import flight_controller
-
-from .utils import logger
-from .dynamics import UAVState
-
-# Use string type hint to avoid circular import
-if TYPE_CHECKING:
-    from .flight_controller import FlightController
+from .drone import Drone
+from .controller import Controller
+from .utils import logger, normalize_angles
 
 class DataLogger:
     """
-    Comprehensive data logging system for UAV telemetry and analysis
+    Comprehensive data logging system for drone telemetry and analysis
     Logs all flight data to CSV for post-flight analysis and debugging
     """
     
@@ -45,11 +40,15 @@ class DataLogger:
             'estimated_position_x', 'estimated_position_y', 'estimated_position_z',
             'flight_mode', 'battery_level',
             'setpoint_altitude', 'setpoint_position_x', 'setpoint_position_y', 'setpoint_position_z',
-            'position_error', 'attitude_error'
+            'position_error', 'attitude_error',
+            'waypoint_index', 'mission_complete'
         ]
         
         self.start_time = time.time()
         self.logging_enabled = True
+        
+        # Auto-start logging when initialized
+        self.start_new_log()
         
     def start_new_log(self):
         """Start a new log file with timestamp"""
@@ -63,79 +62,82 @@ class DataLogger:
             self.csv_file = open(self.current_log_file, 'w', newline='')
             self.csv_writer = csv.DictWriter(self.csv_file, fieldnames=self.fieldnames)
             self.csv_writer.writeheader()
+            self.csv_file.flush()
             logger.info(f"Started new flight log: {self.current_log_file}")
         except Exception as e:
             logger.error(f"Failed to create log file: {e}")
             self.logging_enabled = False
     
-    def log_data(self, flight_controller: 'FlightController'):
+    def log_data(self, drone: Drone, controller: Controller):
+        """Log current drone and controller data"""
         if not self.logging_enabled or self.csv_writer is None or self.csv_file is None:
             return
+        
         try:
             current_time = time.time()
             simulation_time = current_time - self.start_time
 
-            # FIXED: Use proper altitude calculations
-            altitude = -flight_controller.state.position[2]  # Convert NED to altitude
-            vertical_velocity = -flight_controller.state.velocity[2]  # Convert NED to climb rate
+            # Use proper altitude calculations
+            altitude = -drone.true_state.position[2]  # Convert NED to altitude
+            vertical_velocity = -drone.true_state.velocity[2]  # Convert NED to climb rate
+            estimated_altitude = -drone.estimated_state.position[2]  # Convert NED to altitude
 
-            # Safe setpoint extraction
-            position_sp = flight_controller.setpoints.get('position', flight_controller.state.position)
-            attitude_sp = flight_controller.setpoints.get('attitude', np.zeros(3))
-
-            # Position error (Euclidean) - FIXED: Use estimated state vs setpoint
-            position_error = float(np.linalg.norm(flight_controller.estimated_state.position - position_sp))
+            # Position error (Euclidean) - Use estimated state vs setpoint
+            position_error = float(np.linalg.norm(drone.estimated_state.position - controller.setpoints['position']))
 
             # Attitude error (normalize angles to [-pi, pi])
             try:
-                from .utils import normalize_angles
                 attitude_diff = normalize_angles(
-                    flight_controller.estimated_state.orientation - attitude_sp
+                    drone.estimated_state.orientation - np.array([0, 0, controller.setpoints['yaw']])
                 )
                 attitude_error = float(np.linalg.norm(attitude_diff))
             except Exception:
                 attitude_error = 0.0
 
-            # FIXED: Build row with CORRECT state assignments
+            # Build row with CORRECT state assignments
             row = {
                 'timestamp': current_time,
                 'simulation_time': simulation_time,
 
                 # TRUE STATE (from dynamics)
-                'position_x': flight_controller.state.position[0],
-                'position_y': flight_controller.state.position[1], 
+                'position_x': drone.true_state.position[0],
+                'position_y': drone.true_state.position[1], 
                 'position_z': altitude,  # This is the TRUE altitude
-                'velocity_x': flight_controller.state.velocity[0],
-                'velocity_y': flight_controller.state.velocity[1],
+                'velocity_x': drone.true_state.velocity[0],
+                'velocity_y': drone.true_state.velocity[1],
                 'velocity_z': vertical_velocity,
-                'attitude_roll': flight_controller.state.orientation[0],
-                'attitude_pitch': flight_controller.state.orientation[1],
-                'attitude_yaw': flight_controller.state.orientation[2],
+                'attitude_roll': drone.true_state.orientation[0],
+                'attitude_pitch': drone.true_state.orientation[1],
+                'attitude_yaw': drone.true_state.orientation[2],
 
-                # ESTIMATED STATE (from EKF) - FIXED: These were swapped!
-                'estimated_position_x': flight_controller.estimated_state.position[0],
-                'estimated_position_y': flight_controller.estimated_state.position[1],
-                'estimated_position_z': -flight_controller.estimated_state.position[2],  # Convert NED to altitude
+                # ESTIMATED STATE
+                'estimated_position_x': drone.estimated_state.position[0],
+                'estimated_position_y': drone.estimated_state.position[1],
+                'estimated_position_z': estimated_altitude,  # Convert NED to altitude
 
                 # Control outputs
-                'control_throttle': flight_controller.control_output[0] if hasattr(flight_controller, 'control_output') else 0.0,
-                'control_roll': flight_controller.control_output[1] if hasattr(flight_controller, 'control_output') else 0.0,
-                'control_pitch': flight_controller.control_output[2] if hasattr(flight_controller, 'control_output') else 0.0,
-                'control_yaw': flight_controller.control_output[3] if hasattr(flight_controller, 'control_output') else 0.0,
+                'control_throttle': controller.control_output[0],
+                'control_roll': controller.control_output[1],
+                'control_pitch': controller.control_output[2],
+                'control_yaw': controller.control_output[3],
 
                 # System state
-                'flight_mode': flight_controller.flight_mode.value,
+                'flight_mode': controller.flight_mode.value,
                 'battery_level': 85.0,
 
                 # Setpoints
-                'setpoint_altitude': flight_controller.setpoints.get('altitude', 0.0),
-                'setpoint_position_x': float(position_sp[0]),
-                'setpoint_position_y': float(position_sp[1]),
-                'setpoint_position_z': float(position_sp[2]),
+                'setpoint_altitude': controller.setpoints['altitude'],
+                'setpoint_position_x': float(controller.setpoints['position'][0]),
+                'setpoint_position_y': float(controller.setpoints['position'][1]),
+                'setpoint_position_z': float(controller.setpoints['position'][2]),
 
                 # Errors
                 'position_error': position_error,
-                'attitude_error': attitude_error
+                'attitude_error': attitude_error,
+                
+                # Mission status
+                'waypoint_index': controller.current_waypoint_index,
+                'mission_complete': int(controller.mission_complete)
             }
 
             self.csv_writer.writerow(row)
@@ -154,7 +156,7 @@ class DataLogger:
             self.csv_writer = None
             logger.info(f"Closed flight log: {self.current_log_file}")
     
-    def analyze_log(self, log_file_path: str) -> dict:
+    def analyze_log(self, log_file_path: str) -> Dict[str, Any]:
         """
         Analyze a flight log CSV file and compute performance statistics.
         Handles missing data and NaN values gracefully.
