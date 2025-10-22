@@ -15,7 +15,7 @@ class Physics:
     
     def __init__(self):
         # Physical constants
-        self.gravity = 9.81  # m/s^2
+        self.gravity = 9.80665  # m/s^2
         
         # Moment of inertia (kg*m^2) - adjusted for better stability
         self.inertia = np.diag([0.02, 0.02, 0.03])

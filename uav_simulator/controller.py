@@ -20,19 +20,17 @@ class PIDController:
         self.kd = kd
         self.output_min, self.output_max = output_limits
         
-        # Integral limits
+        # Integral limits (prevent windup)
         self.integral_limit = 1.0
         
-        # Derivative filtering
-        self.derivative_filter_alpha = 0.1
+        # Derivative filtering (smooth out noise)
+        self.derivative_filter_alpha = 0.15
         
         # Initialize state variables
         self.integral = 0.0
         self.prev_error = 0.0
         self.prev_derivative = 0.0
-        self.is_launched = False
-        self.hover_throttle = 0.75  
-        self.waypoint_radius = 2.0
+        
     def compute(self, setpoint: float, measurement: float, dt: float) -> float:
         if dt <= 0:
             return 0.0
@@ -42,41 +40,24 @@ class PIDController:
         # Proportional term
         p_term = self.kp * error
         
-        # Integral term with clamping
+        # Integral term with anti-windup
         self.integral += error * dt
-        # Simple clamping
-        if self.integral > self.integral_limit:
-            self.integral = self.integral_limit
-        elif self.integral < -self.integral_limit:
-            self.integral = -self.integral_limit
+        self.integral = np.clip(self.integral, -self.integral_limit, self.integral_limit)
         i_term = self.ki * self.integral
         
-        # Derivative term with filtering
-        if dt > 0:
-            derivative = (error - self.prev_error) / dt
-        else:
-            derivative = 0
-            
-        # Apply derivative filtering
+        # Derivative term with low-pass filtering
+        derivative = (error - self.prev_error) / dt if dt > 0 else 0.0
         derivative = (self.derivative_filter_alpha * derivative + 
                      (1 - self.derivative_filter_alpha) * self.prev_derivative)
-        
         d_term = self.kd * derivative
         
         # Compute output
         output = p_term + i_term + d_term
+        output_limited = np.clip(output, self.output_min, self.output_max)
         
-        # Apply output limits
-        if output > self.output_max:
-            output_limited = self.output_max
-        elif output < self.output_min:
-            output_limited = self.output_min
-        else:
-            output_limited = output
-        
-        # Anti-windup: stop integrating when saturated
-        if output_limited == self.output_min or output_limited == self.output_max:
-            self.integral -= error * dt  # Undo the integration
+        # Anti-windup: back-calculate integral when saturated
+        if output_limited != output:
+            self.integral -= error * dt
         
         # Update state
         self.prev_error = error
@@ -93,6 +74,7 @@ class PIDController:
 class Controller:
     """
     Flight controller with multiple flight modes
+    Tuned for realistic 1kg quadcopter with 2:1 thrust-to-weight ratio
     """
     
     def __init__(self):
@@ -115,20 +97,29 @@ class Controller:
         # Control outputs
         self.control_output: np.ndarray = np.array([0.0, 0.0, 0.0, 0.0])
         
-        # IMPROVED PID TUNING - more aggressive for better response
-        self.altitude_pid = PIDController(4.0, 0.8, 2.5, (-0.6, 0.6))  # More aggressive
-        self.pos_x_pid = PIDController(2.5, 0.3, 1.5, (-0.8, 0.8))     # More responsive position control
-        self.pos_y_pid = PIDController(2.5, 0.3, 1.5, (-0.8, 0.8))     # More responsive position control
-        self.roll_pid = PIDController(4.0, 0.3, 1.0, (-0.8, 0.8))      
-        self.pitch_pid = PIDController(4.0, 0.3, 1.0, (-0.8, 0.8))     
-        self.yaw_pid = PIDController(2.0, 0.2, 0.5, (-0.4, 0.4))   
+        # PID TUNING - Optimized for smooth altitude control and stabilization
+        # Altitude control - gentler gains to prevent overshooting
+        self.altitude_pid = PIDController(2.5, 0.4, 1.8, (-0.35, 0.35))
+        
+        # Position control - moderate gains for stable flight
+        self.pos_x_pid = PIDController(1.2, 0.15, 0.8, (-0.4, 0.4))
+        self.pos_y_pid = PIDController(1.2, 0.15, 0.8, (-0.4, 0.4))
+        
+        # Attitude control - responsive but not aggressive
+        self.roll_pid = PIDController(3.5, 0.2, 0.9, (-0.5, 0.5))
+        self.pitch_pid = PIDController(3.5, 0.2, 0.9, (-0.5, 0.5))
+        self.yaw_pid = PIDController(2.0, 0.15, 0.4, (-0.3, 0.3))
         
         # System state
         self.is_launched = False
-        self.hover_throttle = 0.75  # Increased hover throttle for new physics
-        self.waypoint_radius = 2.0
+        self.hover_throttle = 0.50  # 50% throttle for 2:1 thrust-to-weight ratio
+        self.waypoint_radius = 1.5
         
-        logger.info("✓ Flight Controller initialized")
+        # Velocity limits
+        self.max_climb_rate = 3.0  # m/s (realistic for consumer drone)
+        self.max_descent_rate = 2.0  # m/s
+        
+        logger.info("✓ Flight Controller initialized (optimized for 2:1 T/W ratio)")
     
     def compute_control(self, drone: Drone, dt: float) -> np.ndarray:
         """
@@ -151,79 +142,84 @@ class Controller:
         
         else:
             return np.array([0.0, 0.0, 0.0, 0.0])
+    
     def _stabilize_mode(self, drone: Drone, dt: float) -> np.ndarray:
-        """Stabilize mode - hold altitude and position"""
+        """Stabilize mode - hold altitude and position with smooth control"""
         current_altitude = -drone.estimated_state.position[2]
         target_altitude = self.setpoints['altitude']
-
-        # Altitude control - MORE AGGRESSIVE FOR TAKEOFF
-        if target_altitude > 0.1 or current_altitude > 0.1:
-            throttle_adjustment = self.altitude_pid.compute(
-                setpoint=target_altitude,
-                measurement=current_altitude,
-                dt=dt
+        
+        # Altitude control with velocity limiting
+        altitude_error = target_altitude - current_altitude
+        current_vertical_velocity = -drone.estimated_state.velocity[2]
+        
+        # Calculate desired vertical velocity (limited)
+        if abs(altitude_error) > 0.5:
+            desired_climb_rate = np.clip(
+                altitude_error * 0.8,  # Proportional to error
+                -self.max_descent_rate,
+                self.max_climb_rate
             )
-            throttle = self.hover_throttle + throttle_adjustment
-            # Adjusted clipping for takeoff - allow more throttle
-            if throttle > 0.95: throttle = 0.95  # Increased max
-            if throttle < 0.6: throttle = 0.6    # Increased min for takeoff
         else:
-            # On ground but ready for takeoff - apply minimal throttle
-            throttle = 0.0
-
-        # POSITION CONTROL - FIXED: Always control position, even during takeoff
+            # Close to target - reduce velocity for smooth approach
+            desired_climb_rate = altitude_error * 0.5
+        
+        # Velocity-based altitude control (smoother than position-only)
+        velocity_error = desired_climb_rate - current_vertical_velocity
+        throttle_adjustment = self.altitude_pid.compute(0, -velocity_error, dt)
+        
+        # Calculate hover throttle dynamically
+        hover_throttle = drone.get_hover_throttle()
+        throttle = hover_throttle + throttle_adjustment
+        throttle = np.clip(throttle, 0.0, 0.95)
+        
+        # Position control
         target_pos = self.setpoints['position']
         current_pos = drone.estimated_state.position
         pos_error = target_pos - current_pos
-
-        # Convert position error to desired tilt angles
-        max_tilt_angle = 0.3  # radians (~17 degrees) - reduced for stability
-
-        # Only apply position control when we have significant altitude or are close to target
-        if current_altitude > 0.2 or abs(pos_error[0]) > 0.5 or abs(pos_error[1]) > 0.5:
-            desired_pitch = -self.pos_x_pid.compute(0, pos_error[0], dt)
-            desired_roll = self.pos_y_pid.compute(0, pos_error[1], dt)
-
-            # Clip desired angles
-            if desired_pitch > max_tilt_angle: desired_pitch = max_tilt_angle
-            if desired_pitch < -max_tilt_angle: desired_pitch = -max_tilt_angle
-            if desired_roll > max_tilt_angle: desired_roll = max_tilt_angle
-            if desired_roll < -max_tilt_angle: desired_roll = -max_tilt_angle
+        
+        # Only apply position control when airborne
+        max_tilt_angle = 0.25  # radians (~14 degrees)
+        
+        if current_altitude > 0.3:
+            # Convert position error to desired tilt with velocity consideration
+            current_velocity = drone.estimated_state.velocity
+            
+            # Position + velocity feedback for smoother control
+            desired_pitch = -self.pos_x_pid.compute(0, pos_error[0] + current_velocity[0] * 0.3, dt)
+            desired_roll = self.pos_y_pid.compute(0, pos_error[1] + current_velocity[1] * 0.3, dt)
+            
+            desired_pitch = np.clip(desired_pitch, -max_tilt_angle, max_tilt_angle)
+            desired_roll = np.clip(desired_roll, -max_tilt_angle, max_tilt_angle)
         else:
-            # During initial takeoff or very close to target - keep level
+            # Near ground - keep level
             desired_roll = 0.0
             desired_pitch = 0.0
-    
+        
         # Attitude control
         roll = self.roll_pid.compute(desired_roll, drone.estimated_state.orientation[0], dt)
         pitch = self.pitch_pid.compute(desired_pitch, drone.estimated_state.orientation[1], dt)
         yaw = self.yaw_pid.compute(self.setpoints['yaw'], drone.estimated_state.orientation[2], dt)
-    
+        
         return np.array([throttle, roll, pitch, yaw])
     
     def _auto_mode(self, drone: Drone, dt: float) -> np.ndarray:
         """Auto mode - follow waypoints"""
         if not self.waypoints or self.mission_complete:
             return self._stabilize_mode(drone, dt)
-
         # Get current waypoint
         current_wp = self.waypoints[self.current_waypoint_index]
-
-        # Update setpoint to current waypoint - FIXED: Set both position and altitude
+        # Update setpoints
         self.setpoints['position'] = current_wp
-        self.setpoints['altitude'] = -current_wp[2]  # Convert NED to altitude
-    
+        self.setpoints['altitude'] = -current_wp[2]
+        
         # Use stabilize control to reach waypoint
         control = self._stabilize_mode(drone, dt)
-    
+        
         # Check if waypoint reached
         current_pos = drone.estimated_state.position
-        distance = np.linalg.norm(current_pos - current_wp)
-    
-        # More lenient waypoint acceptance for altitude
         horizontal_distance = np.linalg.norm(current_pos[:2] - current_wp[:2])
         vertical_distance = abs(current_pos[2] - current_wp[2])
-    
+        
         if horizontal_distance < self.waypoint_radius and vertical_distance < 1.0:
             if self.current_waypoint_index < len(self.waypoints) - 1:
                 self.current_waypoint_index += 1
@@ -232,7 +228,7 @@ class Controller:
             else:
                 self.mission_complete = True
                 logger.info("✓ All waypoints reached! Holding position.")
-    
+        
         return control
     
     def _rtl_mode(self, drone: Drone, dt: float) -> np.ndarray:
@@ -241,20 +237,17 @@ class Controller:
         current_altitude = -current_pos[2]
         
         safe_altitude = 5.0  # meters
-        ground_position = np.array([0.0, 0.0, 0.0])
-        
-        # Calculate horizontal distance to home
         distance_to_home_xy = np.linalg.norm(current_pos[:2])
         
-        if distance_to_home_xy > 3.0 or current_altitude < safe_altitude - 1.0:
-            # Phase 1: Go to home XY position at safe altitude
+        if distance_to_home_xy > 2.0 or current_altitude < safe_altitude - 1.0:
+            # Phase 1: Climb to safe altitude and move to home
             target_position = np.array([0.0, 0.0, -safe_altitude])
             self.setpoints['position'] = target_position
             self.setpoints['altitude'] = safe_altitude
             return self._stabilize_mode(drone, dt)
         else:
-            # Phase 2: At home position, now descend to land
-            self.setpoints['position'] = ground_position
+            # Phase 2: At home position, descend to land
+            self.setpoints['position'] = np.array([0.0, 0.0, 0.0])
             self.setpoints['altitude'] = 0.0
             
             if current_altitude < 0.3:
@@ -292,31 +285,29 @@ class Controller:
         
         # Progressive descent rate based on altitude
         if current_altitude > 5.0:
-            descent_rate = 1.0  # m/s
+            descent_rate = 1.2  # m/s
         elif current_altitude > 2.0:
-            descent_rate = 0.5  # m/s
+            descent_rate = 0.6  # m/s
         else:
-            descent_rate = 0.2  # m/s
+            descent_rate = 0.3  # m/s - very gentle final approach
         
         target_altitude = max(0.0, current_altitude - descent_rate * dt)
         
-        throttle_adjustment = self.altitude_pid.compute(
-            target_altitude,
-            current_altitude,
-            dt
-        )
+        # Velocity-based descent control
+        current_vertical_velocity = -drone.estimated_state.velocity[2]
+        velocity_error = -descent_rate - current_vertical_velocity
         
-        throttle = self.hover_throttle + throttle_adjustment
+        throttle_adjustment = self.altitude_pid.compute(0, -velocity_error, dt)
+        hover_throttle = drone.get_hover_throttle()
+        throttle = hover_throttle + throttle_adjustment
         
-        # Reduce throttle gradually as we approach ground
+        # Reduce throttle progressively as we descend
         if current_altitude < 2.0:
-            throttle *= 0.8
+            throttle *= 0.85
         if current_altitude < 1.0:
-            throttle *= 0.6
+            throttle *= 0.7
         
-        # Clip throttle
-        if throttle > 0.6: throttle = 0.6
-        if throttle < 0.2: throttle = 0.2
+        throttle = np.clip(throttle, 0.15, 0.6)
         
         # Keep level attitude during descent
         roll = self.roll_pid.compute(0.0, drone.estimated_state.orientation[0], dt)
@@ -326,35 +317,35 @@ class Controller:
         return np.array([throttle, roll, pitch, yaw])
     
     def launch(self, target_altitude: float = 2.0):
-        """Launch the drone"""
+        """Launch the drone to target altitude"""
         if self.is_launched:
             logger.warning("Already launched!")
             return
 
-        # Set target altitude and position - FIXED: Keep current XY position, only change altitude
-        current_pos = self.setpoints['position'].copy()
-        current_pos[2] = -target_altitude  # Only change Z coordinate (NED: negative for altitude)
+        # Store launch position
+        self.launch_position = self.setpoints['position'].copy()
+        
+        # Set target - keep current XY, only change altitude
+        launch_target = self.launch_position.copy()
+        launch_target[2] = -target_altitude  # NED: negative Z for altitude
 
         self.setpoints['altitude'] = target_altitude
-        self.setpoints['position'] = current_pos  # Keep the same XY position
+        self.setpoints['position'] = launch_target
         self.setpoints['yaw'] = 0.0
 
-        # Reset PIDs
+        # Reset all PIDs
         self.altitude_pid.reset()
         self.pos_x_pid.reset()
         self.pos_y_pid.reset()
         self.roll_pid.reset()
         self.pitch_pid.reset()
         self.yaw_pid.reset()
-    
-        # Increase hover throttle for takeoff
-        self.hover_throttle = 0.85  # Increased for better takeoff
-    
+        
         # Switch to stabilize mode
         self.set_flight_mode(FlightMode.STABILIZE)
         self.is_launched = True
-    
-        logger.info(f"🚀 Launching to {target_altitude}m altitude at current position!")
+        
+        logger.info(f"🚀 Launching to {target_altitude}m altitude!")
     
     def add_waypoint(self, north: float, east: float, altitude: float):
         """Add a waypoint to the mission"""
@@ -374,12 +365,9 @@ class Controller:
         if not self.waypoints:
             logger.warning("No waypoints set!")
             return
-        
         if not self.is_launched:
-            logger.warning("Not launched yet! Auto-launching to 5m...")
-            self.launch(5.0)
-            # Don't sleep here - let the simulation handle timing
-        
+            logger.warning("Not launched yet! Auto-launching to 2m...")
+            self.launch(2.0)
         self.current_waypoint_index = 0
         self.mission_complete = False
         self.set_flight_mode(FlightMode.AUTO)
@@ -395,19 +383,15 @@ class Controller:
         """Change flight mode"""
         if mode == self.flight_mode:
             return
-        
         logger.info(f"Mode change: {self.flight_mode.value} → {mode.value}")
-        
-        # Reset PIDs
+        # Reset PIDs on mode change
         self.altitude_pid.reset()
         self.roll_pid.reset()
         self.pitch_pid.reset()
         self.yaw_pid.reset()
         self.pos_x_pid.reset()
         self.pos_y_pid.reset()
-        
         self.flight_mode = mode
-    
     def get_status(self) -> Dict[str, Any]:
         """Get controller status"""
         return {
