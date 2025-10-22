@@ -99,11 +99,12 @@ class Controller:
         
         # PID TUNING - Optimized for smooth altitude control and stabilization
         # Altitude control - gentler gains to prevent overshooting
-        self.altitude_pid = PIDController(2.5, 0.4, 1.8, (-0.35, 0.35))
+        self.altitude_pid = PIDController(3.0, 0.5, 2.0, (-0.4, 0.4))
         
         # Position control - moderate gains for stable flight
-        self.pos_x_pid = PIDController(1.2, 0.15, 0.8, (-0.4, 0.4))
-        self.pos_y_pid = PIDController(1.2, 0.15, 0.8, (-0.4, 0.4))
+        self.pos_x_pid = PIDController(1.0, 0.1, 0.6, (-0.3, 0.3))
+        self.pos_y_pid = PIDController(1.0, 0.1, 0.6, (-0.3, 0.3))
+
         
         # Attitude control - responsive but not aggressive
         self.roll_pid = PIDController(3.5, 0.2, 0.9, (-0.5, 0.5))
@@ -147,80 +148,69 @@ class Controller:
         """Stabilize mode - hold altitude and position with smooth control"""
         current_altitude = -drone.estimated_state.position[2]
         target_altitude = self.setpoints['altitude']
-        
-        # Altitude control with velocity limiting
+
+        # Improved altitude control with better velocity management
         altitude_error = target_altitude - current_altitude
-        current_vertical_velocity = -drone.estimated_state.velocity[2]
-        
-        # Calculate desired vertical velocity (limited)
-        if abs(altitude_error) > 0.5:
-            desired_climb_rate = np.clip(
-                altitude_error * 0.8,  # Proportional to error
-                -self.max_descent_rate,
-                self.max_climb_rate
-            )
-        else:
-            # Close to target - reduce velocity for smooth approach
-            desired_climb_rate = altitude_error * 0.5
-        
-        # Velocity-based altitude control (smoother than position-only)
-        velocity_error = desired_climb_rate - current_vertical_velocity
-        throttle_adjustment = self.altitude_pid.compute(0, -velocity_error, dt)
-        
+
+        # Use PID for altitude control directly (more reliable)
+        throttle_adjustment = self.altitude_pid.compute(target_altitude, current_altitude, dt)
+
         # Calculate hover throttle dynamically
         hover_throttle = drone.get_hover_throttle()
         throttle = hover_throttle + throttle_adjustment
-        throttle = np.clip(throttle, 0.0, 0.95)
-        
-        # Position control
+
+        # Position control - only when airborne
         target_pos = self.setpoints['position']
         current_pos = drone.estimated_state.position
         pos_error = target_pos - current_pos
-        
-        # Only apply position control when airborne
+
         max_tilt_angle = 0.25  # radians (~14 degrees)
-        
+
         if current_altitude > 0.3:
-            # Convert position error to desired tilt with velocity consideration
-            current_velocity = drone.estimated_state.velocity
-            
-            # Position + velocity feedback for smoother control
-            desired_pitch = -self.pos_x_pid.compute(0, pos_error[0] + current_velocity[0] * 0.3, dt)
-            desired_roll = self.pos_y_pid.compute(0, pos_error[1] + current_velocity[1] * 0.3, dt)
-            
+            # Convert position error to desired tilt
+            desired_pitch = -self.pos_x_pid.compute(target_pos[0], current_pos[0], dt)
+            desired_roll = self.pos_y_pid.compute(target_pos[1], current_pos[1], dt)
+
             desired_pitch = np.clip(desired_pitch, -max_tilt_angle, max_tilt_angle)
             desired_roll = np.clip(desired_roll, -max_tilt_angle, max_tilt_angle)
         else:
             # Near ground - keep level
             desired_roll = 0.0
             desired_pitch = 0.0
-        
+
         # Attitude control
         roll = self.roll_pid.compute(desired_roll, drone.estimated_state.orientation[0], dt)
         pitch = self.pitch_pid.compute(desired_pitch, drone.estimated_state.orientation[1], dt)
         yaw = self.yaw_pid.compute(self.setpoints['yaw'], drone.estimated_state.orientation[2], dt)
-        
-        return np.array([throttle, roll, pitch, yaw])
     
+        # Final throttle limits
+        throttle = np.clip(throttle, 0.15, 0.85)
+    
+        return np.array([throttle, roll, pitch, yaw])
     def _auto_mode(self, drone: Drone, dt: float) -> np.ndarray:
         """Auto mode - follow waypoints"""
         if not self.waypoints or self.mission_complete:
             return self._stabilize_mode(drone, dt)
+
         # Get current waypoint
         current_wp = self.waypoints[self.current_waypoint_index]
-        # Update setpoints
+
+        # Update setpoints - FIX: Ensure proper altitude handling
         self.setpoints['position'] = current_wp
-        self.setpoints['altitude'] = -current_wp[2]
-        
+        self.setpoints['altitude'] = -current_wp[2]  # Convert NED to altitude
+
         # Use stabilize control to reach waypoint
         control = self._stabilize_mode(drone, dt)
-        
+
         # Check if waypoint reached
         current_pos = drone.estimated_state.position
         horizontal_distance = np.linalg.norm(current_pos[:2] - current_wp[:2])
         vertical_distance = abs(current_pos[2] - current_wp[2])
-        
-        if horizontal_distance < self.waypoint_radius and vertical_distance < 1.0:
+    
+        waypoint_reached = (horizontal_distance < self.waypoint_radius and 
+                           vertical_distance < 1.0)
+    
+        if waypoint_reached:
             if self.current_waypoint_index < len(self.waypoints) - 1:
                 self.current_waypoint_index += 1
                 next_wp = self.waypoints[self.current_waypoint_index]
@@ -228,9 +218,10 @@ class Controller:
             else:
                 self.mission_complete = True
                 logger.info("✓ All waypoints reached! Holding position.")
-        
-        return control
+                # Hold at the last waypoint altitude
+                self.setpoints['altitude'] = -current_wp[2]
     
+        return control
     def _rtl_mode(self, drone: Drone, dt: float) -> np.ndarray:
         """Return to launch mode"""
         current_pos = drone.estimated_state.position

@@ -120,15 +120,14 @@ class Drone:
     
     def get_hover_throttle(self) -> float:
         """
-        Calculate theoretical hover throttle
-        At hover: total_thrust = weight
-        With 2:1 thrust-to-weight, hover should be at ~50% throttle
+        Calculate theoretical hover throttle with better accuracy
         """
-        weight = self.mass * 9.81  # N
-        max_thrust = self.thrust_coeff * 4 * (self.max_rpm * 2 * np.pi / 60) ** 2
-        hover_throttle = weight / max_thrust
-        return float(np.clip(hover_throttle, 0.3, 0.7))
-    
+        weight = self.mass * 9.80665  
+        hover_thrust_per_motor = weight / 4.0
+        omega_rads = np.sqrt(hover_thrust_per_motor / self.thrust_coeff)
+        rpm = omega_rads * (60 / (2 * np.pi))
+        throttle = (rpm - self.min_rpm) / (self.max_rpm - self.min_rpm)
+        return float(np.clip(throttle, 0.45, 0.55)) 
     def get_telemetry(self) -> Dict[str, Any]:
         """Get telemetry data for display"""
         return {
