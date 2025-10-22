@@ -102,11 +102,7 @@ class Controller:
         
         # Control outputs
         self.control_output: np.ndarray = np.array([0.0, 0.0, 0.0, 0.0])
-        
-        # CRITICAL FIX: Conservative PID TUNING for stable flight
-        # Altitude control - moderate gains for stability
-        self.altitude_pid = PIDController(3.5, 0.6, 2.0, (-0.4, 0.4))
-        
+        self.altitude_pid = PIDController(4.0, 0.7, 2.2, (-0.6, 0.6))
         # Position control - gentle gains to prevent aggressive tilting
         self.pos_x_pid = PIDController(0.8, 0.05, 0.5, (-0.15, 0.15))
         self.pos_y_pid = PIDController(0.8, 0.05, 0.5, (-0.15, 0.15))
@@ -149,101 +145,84 @@ class Controller:
             return np.array([0.0, 0.0, 0.0, 0.0])
     
     def _stabilize_mode(self, drone: Drone, dt: float) -> np.ndarray:
-        """Stabilize mode - hold altitude and position with robust control"""
-        current_altitude = -drone.estimated_state.position[2]
-        target_altitude = self.setpoints['altitude']
-        
-        # Calculate base hover throttle
-        hover_throttle = drone.get_hover_throttle()
-        
-        # CRITICAL FIX: Improved altitude control with velocity damping
-        altitude_error = target_altitude - current_altitude
-        current_vertical_velocity = -drone.estimated_state.velocity[2]
-        
-        # Limit climb/descent rates for smooth control
+        """Stabilize mode - holds altitude and position using NED-consistent control"""
+
+        # --- ALTITUDE CONTROL (NED: Z positive DOWN) ---
+        current_altitude_ned = drone.estimated_state.position[2]         # positive down
+        target_altitude_ned = -self.setpoints['altitude']                # convert target (up-positive) to NED (down-positive)
+
+        altitude_error = target_altitude_ned - current_altitude_ned
+        current_vertical_velocity_ned = drone.estimated_state.velocity[2]  # positive down
+
+        # Desired vertical velocity (positive down)
         desired_vertical_velocity = np.clip(
-            altitude_error * 0.8,  # Gentle proportional response
-            -self.max_descent_rate,
-            self.max_climb_rate
+            altitude_error * 0.6,
+            -self.max_climb_rate,   # negative = climb
+            self.max_descent_rate   # positive = descend
         )
-        
-        # Velocity-based altitude control (smoother)
-        velocity_error = desired_vertical_velocity - current_vertical_velocity
-        throttle_adjustment = self.altitude_pid.compute(0, -velocity_error, dt)
-        
-        # Base throttle calculation
+
+        velocity_error = desired_vertical_velocity - current_vertical_velocity_ned
+
+        # PID output (increase throttle when descending too fast)
+        throttle_adjustment = self.altitude_pid.compute(-velocity_error, 0, dt)
+        hover_throttle = drone.get_hover_throttle()
         throttle = hover_throttle + throttle_adjustment
-        
-        # Position control with altitude-aware limits
+        throttle = np.clip(throttle, 0.1, 0.9)
+
+        # --- POSITION CONTROL (only active above 0.5m altitude) ---
         target_pos = self.setpoints['position']
         current_pos = drone.estimated_state.position
-        
-        # Only apply position control when sufficiently airborne
-        max_tilt_angle = 0.15  # radians (~8.5 degrees) - reduced for stability
-        
-        if current_altitude > 0.5:  # Only control position when above 0.5m
-            # Horizontal position control with gentle gains
+        current_altitude_m = -current_altitude_ned  # convert NED → up-positive for readability
+
+        max_tilt_angle = 0.15  # radians (~8.5°)
+        if current_altitude_m > 0.5:
+            # Gentle horizontal corrections
             desired_pitch = -self.pos_x_pid.compute(target_pos[0], current_pos[0], dt)
             desired_roll = self.pos_y_pid.compute(target_pos[1], current_pos[1], dt)
-            
-            # Limit tilt angles for stability
+
+            # Limit tilt for stability
             desired_roll = np.clip(desired_roll, -max_tilt_angle, max_tilt_angle)
             desired_pitch = np.clip(desired_pitch, -max_tilt_angle, max_tilt_angle)
         else:
-            # Near ground - prioritize altitude over position
             desired_roll = 0.0
             desired_pitch = 0.0
-        
-        # Attitude control with angle wrapping
+
+        # --- ATTITUDE CONTROL ---
         current_attitude = drone.estimated_state.orientation
-        
         roll_output = self.roll_pid.compute(desired_roll, current_attitude[0], dt)
         pitch_output = self.pitch_pid.compute(desired_pitch, current_attitude[1], dt)
         yaw_output = self.yaw_pid.compute(self.setpoints['yaw'], current_attitude[2], dt)
-        
-        # CRITICAL FIX: Conservative throttle management
-        # Ensure sufficient throttle to maintain altitude
-        min_throttle = max(0.35, hover_throttle - 0.1)  # Higher minimum
-        max_throttle = min(0.8, hover_throttle + 0.2)   # Lower maximum
-        
-        # Apply throttle limits
-        throttle = np.clip(throttle, min_throttle, max_throttle)
-        
-        # Emergency altitude recovery
-        if current_vertical_velocity < -2.0:  # Descending faster than 2m/s
+
+        # --- EMERGENCY ALTITUDE RECOVERY ---
+        if current_vertical_velocity_ned > 2.0:       # falling fast (positive down)
             throttle += 0.15
-        elif altitude_error > 1.0:  # More than 1m below target
+        elif altitude_error > 1.0:                    # more than 1m below target (too low)
             throttle += 0.1
-        
-        # Final safety limits
-        throttle = np.clip(throttle, 0.3, 0.8)  # Conservative limits
-        
-        # Store control output for logging
+
+        # --- FINAL CLAMPING ---
+        throttle = np.clip(throttle, 0.3, 0.8)
+
+        # Store and return control output
         self.control_output = np.array([throttle, roll_output, pitch_output, yaw_output])
-        
         return self.control_output
-    
+
     def _auto_mode(self, drone: Drone, dt: float) -> np.ndarray:
         """Auto mode - follow waypoints with smooth transitions"""
         if not self.waypoints or self.mission_complete:
             return self._stabilize_mode(drone, dt)
-        
-        # Get current waypoint
         current_wp = self.waypoints[self.current_waypoint_index]
-        
-        # CRITICAL FIX: Smooth setpoint updates
+        target_altitude = -current_wp[2] 
         current_altitude = -drone.estimated_state.position[2]
-        target_altitude = -current_wp[2]
+        altitude_diff = target_altitude - current_altitude
         
-        # Smooth altitude transition (prevent sudden jumps)
-        altitude_diff = target_altitude - self.setpoints['altitude']
-        if abs(altitude_diff) > 5.0:  # Large altitude change
-            # Gradual adjustment
-            self.setpoints['altitude'] += np.sign(altitude_diff) * min(2.0, abs(altitude_diff) * 0.1)
+        if abs(altitude_diff) > 5.0: # Large altitude change
+            max_altitude_change = 2.0 * dt  # Limit rate of change
+            altitude_change = np.sign(altitude_diff) * min(max_altitude_change, abs(altitude_diff) * 0.1)
+            self.setpoints['altitude'] += altitude_change
         else:
             self.setpoints['altitude'] = target_altitude
         
-        # Update position setpoint
+        # Update position setpoint (waypoint coordinates in NED)
         self.setpoints['position'] = current_wp
         
         # Use stabilize control to reach waypoint
@@ -386,7 +365,7 @@ class Controller:
     
     def add_waypoint(self, north: float, east: float, altitude: float):
         """Add a waypoint to the mission"""
-        waypoint = np.array([north, east, -abs(altitude)])
+        waypoint = np.array([north, east, -abs(altitude)])  # Store altitude as negative Z in NED
         self.waypoints.append(waypoint)
         logger.info(f"📍 Added waypoint: N{north:.1f} E{east:.1f} Alt{altitude:.1f}m")
     

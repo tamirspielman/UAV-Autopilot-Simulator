@@ -305,7 +305,6 @@ if HAS_DASH and HAS_PLOTLY:
                                     html.Div(id='waypoint-list', className='mt-3')
                                 ])
                             ], className='mb-4'),
-                            
                             # Flight Modes (from new version)
                             dbc.Card([
                                 dbc.CardHeader("✈️ Flight Modes", 
@@ -323,7 +322,6 @@ if HAS_DASH and HAS_PLOTLY:
                                 ])
                             ])
                         ], width=4),
-                        
                         # Right Panel - Enhanced Visualizations (from old version)
                         dbc.Col([
                             # Status Display Card (from old version)
