@@ -164,18 +164,13 @@ class Controller:
         max_tilt_angle = 0.06  # radians (~3.4°)
         desired_roll = 0.0
         desired_pitch = 0.0
-
-        if current_altitude_m > 2.0:
-            pos_error_x = target_pos[0] - current_pos[0]
-            pos_error_y = target_pos[1] - current_pos[1]
-
-            # FIX: Scale position errors to prevent aggressive responses
-            max_pos_error = 8.0  # meters
-            pos_error_x = np.clip(pos_error_x, -max_pos_error, max_pos_error)
-            pos_error_y = np.clip(pos_error_y, -max_pos_error, max_pos_error)
-            desired_pitch = -np.clip(pos_error_x * 0.02, -max_tilt_angle, max_tilt_angle)  # Reduced from 0.05
-            desired_roll = np.clip(pos_error_y * 0.02, -max_tilt_angle, max_tilt_angle)    # Reduced from 0.05
-        # --- ATTITUDE CONTROL ---
+        if current_altitude_m > 1.5:
+            # Position PIDs output directly mapped to small attitude setpoints (PID limits are conservative)
+            desired_pitch = -self.pos_x_pid.compute(target_pos[0], current_pos[0], dt)
+            desired_roll  =  self.pos_y_pid.compute(target_pos[1], current_pos[1], dt)
+            # Clip to safe tilt angles
+            desired_pitch = np.clip(desired_pitch, -max_tilt_angle, max_tilt_angle)
+            desired_roll  = np.clip(desired_roll, -max_tilt_angle, max_tilt_angle)
         current_attitude = drone.estimated_state.orientation
         roll_output = self.roll_pid.compute(desired_roll, current_attitude[0], dt)
         pitch_output = self.pitch_pid.compute(desired_pitch, current_attitude[1], dt)
@@ -201,16 +196,17 @@ class Controller:
         throttle = np.clip(throttle, 0.35, 0.75)
         self.control_output = np.array([throttle, roll_output, pitch_output, yaw_output])
         return self.control_output
+    
     def _auto_mode(self, drone: Drone, dt: float) -> np.ndarray:
         """Auto mode - follow waypoints with smoother transitions"""
         if not self.waypoints or self.mission_complete:
             return self._stabilize_mode(drone, dt)
 
-        current_wp = self.waypoints[self.current_waypoint_index]
+        current_wp = self.waypoints[self.current_waypoint_index]  # [north, east, altitude_positive]
 
         # Smooth altitude transition - limit climb/descent rates
         current_altitude = -drone.estimated_state.position[2]
-        target_altitude = -current_wp[2]
+        target_altitude = current_wp[2]  # positive altitude in meters
 
         # Limit altitude changes to prevent aggressive climbs/descents
         max_altitude_change = 0.5 * dt  # Max 0.5 m/s altitude change
@@ -221,41 +217,38 @@ class Controller:
                 target_altitude = current_altitude - max_altitude_change
 
         self.setpoints['altitude'] = target_altitude
-        self.setpoints['position'] = current_wp
+        # store XY in NED horizontally (Z kept separately)
+        self.setpoints['position'] = np.array([current_wp[0], current_wp[1], 0.0])
 
         control = self._stabilize_mode(drone, dt)
 
         # Waypoint checking with larger acceptance radius
         current_pos = drone.estimated_state.position
         horizontal_distance = np.linalg.norm(current_pos[:2] - current_wp[:2])
-        vertical_distance = abs(current_pos[2] - current_wp[2])
+        vertical_distance = abs(current_altitude - current_wp[2])
 
         waypoint_reached = (horizontal_distance < self.waypoint_radius and 
-                           vertical_distance < 2.0)  # Increased from 1.0
-    
+                           vertical_distance < 2.0)
+
         if waypoint_reached:
             if self.current_waypoint_index < len(self.waypoints) - 1:
                 self.current_waypoint_index += 1
                 next_wp = self.waypoints[self.current_waypoint_index]
-                logger.info(f"✓ Waypoint {self.current_waypoint_index} reached! Next: N{next_wp[0]:.1f} E{next_wp[1]:.1f} Alt{-next_wp[2]:.1f}m")
-            
-                # Reset position PIDs for new waypoint to prevent windup
+                logger.info(f"✓ Waypoint {self.current_waypoint_index} reached! Next: N{next_wp[0]:.1f} E{next_wp[1]:.1f} Alt{next_wp[2]:.1f}m")
                 self.pos_x_pid.reset()
                 self.pos_y_pid.reset()
             else:
                 self.mission_complete = True
                 logger.info("✓ All waypoints reached! Holding position.")
-    
+
         return control
-    
+
     def _rtl_mode(self, drone: Drone, dt: float) -> np.ndarray:
         """Return to launch mode"""
         current_pos = drone.estimated_state.position
         current_altitude = -current_pos[2]
-        
         safe_altitude = max(5.0, current_altitude + 2.0)  # At least 2m above current
-        distance_to_home_xy = np.linalg.norm(current_pos[:2])
-        
+        distance_to_home_xy = np.linalg.norm(current_pos[:2] - self.launch_position[:2])
         if distance_to_home_xy > 2.0 or current_altitude < safe_altitude - 1.0:
             # Phase 1: Climb to safe altitude and move to home
             target_position = np.array([0.0, 0.0, -safe_altitude])

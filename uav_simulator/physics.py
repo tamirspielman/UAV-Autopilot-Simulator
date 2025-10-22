@@ -84,6 +84,15 @@ class Physics:
                 elif new_state.velocity[2] < 0 and current_thrust < weight_force:  # Moving upward but not enough thrust
                     new_state.velocity[2] *= 0.5  # Dampen upward velocity
             # If we have enough thrust, allow the drone to lift off
+
+        drone.true_state = new_state
+        drone.estimated_state = DroneState()
+        drone.estimated_state.position = new_state.position.copy()
+        drone.estimated_state.velocity = new_state.velocity.copy()
+        drone.estimated_state.orientation = new_state.orientation.copy()
+        drone.estimated_state.angular_velocity = new_state.angular_velocity.copy()
+        drone.estimated_state.acceleration = new_state.acceleration.copy()
+        drone.estimated_state.timestamp = new_state.timestamp
         return new_state
     
     def _control_to_motors(self, control: np.ndarray, drone: Drone) -> np.ndarray:
