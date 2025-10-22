@@ -697,7 +697,7 @@ if HAS_DASH and HAS_PLOTLY:
         
         def run(self, debug: bool = False, port: int = 8050):
             """Start the dashboard server"""
-            logger.info(f"🚀 Starting Merged UAV Dashboard on http://localhost:{port}")
+            logger.info(f"UAV Dashboard on http://localhost:{port}")
             try:
                 self.app.run(debug=debug, port=port, host='0.0.0.0')
             except Exception as e:

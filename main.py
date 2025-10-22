@@ -11,7 +11,7 @@ def main():
     Main entry point for the UAV simulator
     """
     print("=" * 60)
-    print("🚁 UAV AUTOPILOT SIMULATOR - REFACTORED VERSION")
+    print("🚁 UAV AUTOPILOT SIMULATOR")
     print("=" * 60)
     
     # Create simulation manager
