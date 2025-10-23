@@ -80,8 +80,9 @@ class Controller:
         self.max_climb_rate = self.max_xy_velocity
         self.max_descent_rate = 3.0
 
-        # Altitude PID
-        self.altitude_pid = PIDController(2.5, 0.3, 1.2, (-0.8, 0.8))
+        # Altitude PID - reduced integral to prevent overshoot
+        self.altitude_pid = PIDController(2.5, 0.1, 1.2, (-0.8, 0.8))
+        self.altitude_pid.integral_limit = 0.5  # Tighter integral limit
         
         # Position control - Balanced gains for accuracy
         self.pos_x_pid = PIDController(0.4, 0.002, 0.6, (-5.0, 5.0))
@@ -121,13 +122,20 @@ class Controller:
         current_vertical_velocity_ned = drone.estimated_state.velocity[2]
         current_altitude_m = -current_altitude_ned
 
-        # Altitude control
-        altitude_velocity_gain = 1.2
+        # Altitude control with overshoot prevention
+        altitude_velocity_gain = 1.0  # Reduced from 1.2
         desired_vertical_velocity = np.clip(
             altitude_error * altitude_velocity_gain,
             -self.max_climb_rate,
             self.max_descent_rate
         )
+        
+        # Add damping when approaching target altitude
+        if abs(altitude_error) < 3.0:
+            # Slow down as we approach target
+            damping_factor = abs(altitude_error) / 3.0
+            desired_vertical_velocity *= max(0.3, damping_factor)
+        
         velocity_error = desired_vertical_velocity - current_vertical_velocity_ned
         throttle_adjustment = self.altitude_pid.compute(-velocity_error, 0, dt)
         hover_throttle = drone.get_hover_throttle()
