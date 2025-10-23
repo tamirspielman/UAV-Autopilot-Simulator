@@ -1,25 +1,17 @@
-# simulation_manager.py
-"""
-Simulation Manager - MERGED with Enhanced 3D Visualization & Simplified Controls
-"""
 import time
 import threading
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 from collections import deque
-
 from .utils import logger, check_imports, FlightMode
 from .drone import Drone
 from .physics import Physics
 from .controller import Controller
 from .datalogger import DataLogger
-
-# Check for visualization dependencies
 IMPORTS = check_imports()
 HAS_DASH = IMPORTS.get('dash', False)
 HAS_PLOTLY = IMPORTS.get('plotly', False)
 HAS_DBC = IMPORTS.get('dbc', False)
-
 if HAS_DASH:
     import dash
     from dash import dcc, html
@@ -29,30 +21,18 @@ if HAS_DASH:
     if HAS_PLOTLY:
         import plotly.graph_objects as go
         from plotly.subplots import make_subplots
-
 class SimulationManager:
-    """
-    Merged Simulation Manager with enhanced 3D visualization and simplified controls
-    """
-    
     def __init__(self):
-        # Initialize core components
         self.drone = Drone()
         self.physics = Physics()
         self.controller = Controller()
         self.data_logger = DataLogger()
-        
-        # Simulation state
         self.running = False
         self.simulation_thread = None
-        self.dt = 0.01  # 100Hz update rate
-        
-        # Timing
+        self.dt = 0.01  
         self.last_update = time.time()
         self.last_log_time = time.time()
         self.log_interval = 0.1
-        
-        # Initialize dashboard
         if HAS_DASH and HAS_PLOTLY:
             try:
                 self.dashboard = MergedDashboard(self)
@@ -68,80 +48,54 @@ class SimulationManager:
                 logger.warning("Plotly not available - dashboard disabled")
         
         logger.info("✓ Simulation Manager initialized")
-    
     def start_simulation(self):
-        """Start the simulation"""
         if self.running:
             return
-        
         self.running = True
         self.simulation_thread = threading.Thread(target=self._simulation_loop)
         self.simulation_thread.daemon = True
         self.simulation_thread.start()
         logger.info("Simulation started")
-    
     def _simulation_loop(self):
-        """Main simulation loop"""
         while self.running:
             current_time = time.time()
             dt = current_time - self.last_update
-            
             if dt >= self.dt:
                 try:
-                    # Compute control outputs
                     control_output = self.controller.compute_control(self.drone, dt)
                     self.controller.control_output = control_output
-                    
-                    # Update physics
                     new_state = self.physics.update(self.drone, control_output, dt)
-                    self.drone.true_state = new_state
-                    
-                    # For now, estimated state = true state (no sensor noise)
-                    self.drone.estimated_state = new_state
-                    
-                    # Log data periodically - FIXED: This was missing!
+                    self.drone.true_state = new_state                    
+                    self.drone.estimated_state = new_state                   
                     if current_time - self.last_log_time >= self.log_interval:
                         self.data_logger.log_data(self.drone, self.controller)
                         self.last_log_time = current_time
-                    
                     self.last_update = current_time
-                    
                 except Exception as e:
                     logger.error(f"Simulation loop error: {e}")
-            
             time.sleep(0.001)
-    
     def stop_simulation(self):
-        """Stop the simulation"""
         self.running = False
         if self.simulation_thread:
             self.simulation_thread.join(timeout=2.0)
-        
         self.data_logger.stop_logging()
         logger.info("Simulation stopped")
-    
     def run_with_dashboard(self, port: int = 8050):
-        """Run simulation with dashboard"""
         if self.dashboard is None:
             logger.warning("Dashboard not available, running headless")
             self.run_headless()
             return
-        
         logger.info("Starting simulation with dashboard...")
         self.start_simulation()
-        
         try:
             self.dashboard.run(port=port)
         except KeyboardInterrupt:
             logger.info("Shutting down...")
         finally:
             self.stop_simulation()
-    
     def run_headless(self):
-        """Run without dashboard"""
         logger.info("Starting headless simulation...")
         self.start_simulation()
-        
         try:
             while self.running:
                 time.sleep(1)
@@ -153,94 +107,56 @@ class SimulationManager:
             logger.info("Shutting down...")
         finally:
             self.stop_simulation()
-    
     def get_telemetry(self) -> Dict:
-        """Get telemetry data for dashboard - returns NED position (z negative = below origin)"""
         drone_telemetry = self.drone.get_telemetry()
         controller_status = self.controller.get_status()
-        
-        # NED position (keep sign convention consistent with dynamics)
         ned_pos = self.drone.estimated_state.position.copy()
         ned_vel = self.drone.estimated_state.velocity.copy()
-
-        current_altitude = -ned_pos[2]  # positive altitude (for displays)
+        current_altitude = -ned_pos[2]  
         vertical_velocity = -ned_vel[2]
-
         return {
-            # Keep position as NED vector
             'position': [float(ned_pos[0]), float(ned_pos[1]), float(ned_pos[2])],
-            # velocity in NED (vx, vy, vz)
             'velocity': [float(ned_vel[0]), float(ned_vel[1]), float(ned_vel[2])],
-            # also expose altitude explicitly so consumers don't guess sign
             'altitude': float(current_altitude),
             'vertical_velocity': float(vertical_velocity),
-            'attitude': self.drone.estimated_state.orientation.tolist(),  # roll, pitch, yaw (radians)
+            'attitude': self.drone.estimated_state.orientation.tolist(), 
             'flight_mode': controller_status['flight_mode'],
-            'battery': 85.0,
-            'gps_fix': True,
             'waypoint_index': controller_status['waypoint_index'],
             'mission_complete': controller_status['mission_complete'],
             'control_output': controller_status['control_output'],
             'is_launched': controller_status['is_launched'],
-            # add estimated_state vector for debugging/tracing if needed
             'estimated_position': self.drone.estimated_state.position.tolist(),
-            'true_position': self.drone.true_state.position.tolist()  # true (dynamics) state for cross-check
+            'true_position': self.drone.true_state.position.tolist() 
         }
-    
-    # Controller proxy methods for dashboard
     def launch(self, target_altitude: float = 2.0):
-        """Launch the drone"""
         self.controller.launch(target_altitude)
-    
     def add_waypoint(self, north: float, east: float, altitude: float):
-        """Add a waypoint to the mission"""
         self.controller.add_waypoint(north, east, altitude)
-    
     def clear_waypoints(self):
-        """Clear all waypoints"""
         self.controller.clear_waypoints()
-    
     def start_mission(self):
-        """Start autonomous mission"""
         self.controller.start_mission()
-    
     def set_flight_mode(self, mode: FlightMode):
-        """Change flight mode"""
         self.controller.set_flight_mode(mode)
-    
     @property
     def waypoints(self):
-        """Get waypoints from controller"""
         return self.controller.waypoints
-
-
 if HAS_DASH and HAS_PLOTLY:
     class MergedDashboard:
-        """
-        Merged Dashboard with Enhanced 3D Visualization & Simplified Controls
-        """
-        
         def __init__(self, sim_manager: SimulationManager):
             self.sim = sim_manager
-            
             if HAS_DBC:
                 self.app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG])
             else:
                 self.app = dash.Dash(__name__)
-            
             self.setup_layout()
             self.setup_callbacks()
-            
-            # Data buffers (from old version)
             self.position_history = deque(maxlen=200)
             self.attitude_history = deque(maxlen=200)
             self.control_history = deque(maxlen=200)
             self.start_time = time.time()
-            
             logger.info("Merged dashboard layout initialized successfully")
-        
         def setup_layout(self):
-            """Setup merged dashboard layout"""
             if HAS_DBC:
                 self.app.layout = dbc.Container([
                     # Header (from old version)
@@ -256,12 +172,8 @@ if HAS_DASH and HAS_PLOTLY:
                             ])
                         ], width=12)
                     ], className='mb-4'),
-                    
-                    # Main Content
                     dbc.Row([
-                        # Left Panel - Simplified Controls (from new version)
                         dbc.Col([
-                            # Launch Control (from new version)
                             dbc.Card([
                                 dbc.CardHeader("🚀 Launch Control", 
                                               style={'backgroundColor': '#2a2a2a', 'color': 'white'}),
@@ -271,9 +183,7 @@ if HAS_DASH and HAS_PLOTLY:
                                               disabled=False),
                                     html.Div(id='launch-status', className='text-center')
                                 ])
-                            ], className='mb-4'),
-                            
-                            # Waypoint Input (from new version)
+                            ], className='mb-4'),                            
                             dbc.Card([
                                 dbc.CardHeader("📍 Waypoint Input (NED)", 
                                               style={'backgroundColor': '#2a2a2a', 'color': 'white'}),
@@ -285,8 +195,7 @@ if HAS_DASH and HAS_PLOTLY:
                                     dbc.Input(id='wp-east', type='number', value=0, className='mb-2'),
                                     
                                     html.Label("Altitude (m)", className='text-light'),
-                                    dbc.Input(id='wp-alt', type='number', value=5, className='mb-3'),
-                                    
+                                    dbc.Input(id='wp-alt', type='number', value=5, className='mb-3'),                                    
                                     dbc.Row([
                                         dbc.Col([
                                             dbc.Button("➕ Add Waypoint", id='add-wp-btn', 
@@ -301,7 +210,6 @@ if HAS_DASH and HAS_PLOTLY:
                                     html.Div(id='waypoint-list', className='mt-3')
                                 ])
                             ], className='mb-4'),
-                            # Flight Modes (from new version)
                             dbc.Card([
                                 dbc.CardHeader("✈️ Flight Modes", 
                                               style={'backgroundColor': '#2a2a2a', 'color': 'white'}),
@@ -316,9 +224,7 @@ if HAS_DASH and HAS_PLOTLY:
                                 ])
                             ])
                         ], width=4),
-                        # Right Panel - Enhanced Visualizations (from old version)
                         dbc.Col([
-                            # Status Display Card (from old version)
                             dbc.Card([
                                 dbc.CardHeader("📊 Real-time Telemetry", 
                                               style={'backgroundColor': '#2a2a2a', 'color': 'white'}),
@@ -327,18 +233,14 @@ if HAS_DASH and HAS_PLOTLY:
                                         dbc.Col([html.Div(id='status-display')], width=12)
                                     ])
                                 ])
-                            ], className='mb-4'),
-                            
-                            # 3D Visualization Card (from old version - enhanced)
+                            ], className='mb-4'),                            
                             dbc.Card([
                                 dbc.CardHeader("🌍 3D Flight Path", 
                                               style={'backgroundColor': '#2a2a2a', 'color': 'white'}),
                                 dbc.CardBody([
                                     dcc.Graph(id='3d-trajectory-plot')
                                 ])
-                            ], className='mb-4'),
-                            
-                            # Charts Row (from old version - with proper attitude graphs)
+                            ], className='mb-4'),                            
                             dbc.Row([
                                 dbc.Col([
                                     dbc.Card([
@@ -355,20 +257,15 @@ if HAS_DASH and HAS_PLOTLY:
                             ])
                         ], width=8)
                     ]),
-                    
-                    # Update interval
                     dcc.Interval(
                         id='update-interval',
-                        interval=500,  # Update every 500ms for smoother display
+                        interval=500, 
                         n_intervals=0
                     ),
-                    
-                    # Storage for waypoints
                     dcc.Store(id='waypoints-store', data=[])
                     
                 ], fluid=True, style={'backgroundColor': '#1a1a1a', 'minHeight': '100vh', 'padding': '20px'})
             else:
-                # Simple fallback
                 self.app.layout = html.Div([
                     html.H1("UAV Control"),
                     html.Button('Launch', id='launch-btn'),
@@ -378,10 +275,7 @@ if HAS_DASH and HAS_PLOTLY:
                     dcc.Graph(id='attitude-plot'),
                     dcc.Interval(id='update-interval', interval=1000, n_intervals=0)
                 ])
-        
-        def setup_callbacks(self):
-            """Setup merged dashboard callbacks"""
-            
+        def setup_callbacks(self):      
             @self.app.callback(
                 [Output('status-display', 'children'),
                  Output('position-plot', 'figure'),
@@ -392,11 +286,8 @@ if HAS_DASH and HAS_PLOTLY:
             )
             def update_dashboard(n):
                 try:
-                    # Get telemetry data
                     telemetry = self.sim.get_telemetry()
                     current_altitude = telemetry['altitude']
-                    
-                    # Update data buffers (from old version)
                     current_time = time.time()
                     self.position_history.append({
                         'time': current_time,
@@ -410,8 +301,6 @@ if HAS_DASH and HAS_PLOTLY:
                         'pitch': np.degrees(telemetry['attitude'][1]),
                         'yaw': np.degrees(telemetry['attitude'][2])
                     })
-                    
-                    # Create enhanced status display (from old version)
                     if HAS_DBC:
                         status_display = dbc.Row([
                             dbc.Col([
@@ -452,17 +341,11 @@ if HAS_DASH and HAS_PLOTLY:
                             html.P(f"Attitude: Roll{np.degrees(telemetry['attitude'][0]):.1f}° Pitch{np.degrees(telemetry['attitude'][1]):.1f}° Yaw{np.degrees(telemetry['attitude'][2]):.1f}°"),
                             html.P(f"Mode: {telemetry['flight_mode']} | WP: {telemetry['waypoint_index'] + 1}/{(len(self.sim.waypoints) if self.sim.waypoints else 0)}")
                         ])
-                    
-                    # Create enhanced plots (from old version)
                     pos_fig = self._create_position_plot()
                     att_fig = self._create_attitude_plot()
                     traj_fig = self._create_3d_trajectory_plot()
-                    
-                    # Disable launch button if already launched (from new version)
                     launch_disabled = telemetry['is_launched']
-                    
                     return status_display, pos_fig, att_fig, traj_fig, launch_disabled
-                    
                 except Exception as e:
                     logger.error(f"Dashboard update error: {e}")
                     error_msg = html.Div([
@@ -471,8 +354,6 @@ if HAS_DASH and HAS_PLOTLY:
                     ])
                     empty_fig = {'data': [], 'layout': {'title': 'Error'}}
                     return error_msg, empty_fig, empty_fig, empty_fig, False
-            
-            # Control callbacks (from new version)
             @self.app.callback(
                 Output('waypoints-store', 'data'),
                 [Input('launch-btn', 'n_clicks'),
@@ -486,7 +367,7 @@ if HAS_DASH and HAS_PLOTLY:
                  State('wp-alt', 'value'),
                  State('waypoints-store', 'data')]
             )
-            def handle_buttons(launch_n, add_n, clear_n, mission_n, rtl_n, land_n, emergency_n,
+            def handle_buttons(launch_n, add_n, clear_n, mission_n, rtl_n, land_n,
                              north, east, alt, waypoints):
                 ctx = dash.callback_context
                 if not ctx.triggered:
@@ -494,58 +375,45 @@ if HAS_DASH and HAS_PLOTLY:
                 
                 button_id = ctx.triggered[0]['prop_id'].split('.')[0]
                 waypoints = waypoints or []
-                
                 try:
                     if button_id == 'launch-btn':
                         self.sim.launch(target_altitude=2.0)
                         logger.info("🚀 Launch button pressed")
-                    
                     elif button_id == 'add-wp-btn':
                         if north is not None and east is not None and alt is not None:
                             self.sim.add_waypoint(north, east, alt)
-                            waypoints.append({'n': north, 'e': east, 'a': alt})
-                    
+                            waypoints.append({'n': north, 'e': east, 'a': alt})                    
                     elif button_id == 'clear-wp-btn':
                         self.sim.clear_waypoints()
-                        waypoints = []
-                    
+                        waypoints = []                    
                     elif button_id == 'mission-btn':
-                        self.sim.start_mission()
-                    
+                        self.sim.start_mission()                   
                     elif button_id == 'rtl-btn':
-                        self.sim.set_flight_mode(FlightMode.RTL)
-                    
+                        self.sim.set_flight_mode(FlightMode.RTL)                    
                     elif button_id == 'land-btn':
                         self.sim.set_flight_mode(FlightMode.LAND)
                 except Exception as e:
-                    logger.error(f"Button handler error: {e}")
-                
-                return waypoints
-            
+                    logger.error(f"Button handler error: {e}")                
+                return waypoints            
             @self.app.callback(
                 Output('waypoint-list', 'children'),
                 [Input('waypoints-store', 'data')]
             )
             def update_waypoint_list(waypoints):
                 if not waypoints:
-                    return html.P("No waypoints", className='text-muted')
-                
+                    return html.P("No waypoints", className='text-muted')                
                 items = []
                 for i, wp in enumerate(waypoints):
                     items.append(
                         html.P(f"WP{i+1}: N{wp['n']} E{wp['e']} Alt{wp['a']}m", 
                               style={'color': '#00ff88', 'margin': '5px'})
                     )
-                return html.Div(items)
-        
+                return html.Div(items)        
         def _create_position_plot(self):
-            """Create enhanced position plot (from old version)"""
             if not self.position_history:
                 return {'data': [], 'layout': {}}
-            
             pos_data = list(self.position_history)
             times = [p['time'] - self.start_time for p in pos_data]
-            
             fig = {
                 'data': [
                     {'x': times, 'y': [p['x'] for p in pos_data], 
@@ -566,15 +434,12 @@ if HAS_DASH and HAS_PLOTLY:
                 }
             }
             return fig
-        
         def _create_attitude_plot(self):
             """Create enhanced attitude plot (from old version) - FIXED with roll, pitch, yaw"""
             if not self.attitude_history:
                 return {'data': [], 'layout': {}}
-            
             att_data = list(self.attitude_history)
             times = [a['time'] - self.start_time for a in att_data]
-            
             fig = {
                 'data': [
                     {'x': times, 'y': [a['roll'] for a in att_data], 
@@ -595,43 +460,35 @@ if HAS_DASH and HAS_PLOTLY:
                 }
             }
             return fig
-        
         def _create_3d_trajectory_plot(self):
             """Create 3D trajectory plot - FIXED VERSION (from old version)"""
             if not self.position_history:
                 return {'data': [], 'layout': {}}
-            
             pos_data = list(self.position_history)
-            
-            # Create 3D scatter plot with proper altitude conversion
             trace = go.Scatter3d(
                 x=[p['x'] for p in pos_data],
                 y=[p['y'] for p in pos_data],
-                z=[-p['z'] for p in pos_data],  # Convert NED to altitude (negative Z = positive altitude)
+                z=[-p['z'] for p in pos_data], 
                 mode='lines+markers',
                 line=dict(color='#00ff88', width=4),
                 marker=dict(
                     size=3, 
-                    color=[-p['z'] for p in pos_data],  # Color by altitude
+                    color=[-p['z'] for p in pos_data], 
                     colorscale='Viridis', 
                     showscale=True,
                     colorbar=dict(title="Altitude (m)")
                 ),
                 name='Flight Path'
             )
-            
-            # Add current position as larger marker
             current_pos = pos_data[-1]
             current_trace = go.Scatter3d(
                 x=[current_pos['x']],
                 y=[current_pos['y']],
-                z=[-current_pos['z']],  # Convert to altitude
+                z=[-current_pos['z']],  
                 mode='markers',
                 marker=dict(size=8, color='red', symbol='diamond'),
                 name='Current Position'
             )
-            
-            # Add waypoints if available
             waypoints_trace = None
             if self.sim.waypoints and len(self.sim.waypoints) > 0:
                 waypoints_trace = go.Scatter3d(
@@ -642,11 +499,9 @@ if HAS_DASH and HAS_PLOTLY:
                     marker=dict(size=8, color='yellow', symbol='square', line=dict(width=2, color='orange')),
                     name='Waypoints'
                 )
-            
             data = [trace, current_trace]
             if waypoints_trace:
                 data.append(waypoints_trace)
-            
             fig = go.Figure(data=data)
             fig.update_layout(
                 title={'text': '3D Flight Trajectory', 'font': {'color': 'white'}},
@@ -679,9 +534,7 @@ if HAS_DASH and HAS_PLOTLY:
                     bgcolor='rgba(0,0,0,0.5)'
                 )
             )
-            
             return fig
-        
         def run(self, debug: bool = False, port: int = 8050):
             """Start the dashboard server"""
             logger.info(f"UAV Dashboard on http://localhost:{port}")
