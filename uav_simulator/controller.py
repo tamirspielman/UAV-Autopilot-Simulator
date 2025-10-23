@@ -2,7 +2,9 @@ import numpy as np
 from typing import List, Dict, Any, Tuple
 from .utils import FlightMode, logger
 from .drone import Drone
-
+#TODO:optimize flight path, the vertical and horizontal speed are the same so i think thats why its flies too high.
+# fix landing & RTL.
+# Implement wind disturbance model
 class PIDController:
     def __init__(self, kp: float, ki: float, kd: float,
                  output_limits: Tuple[float, float] = (-0.5, 0.5),
