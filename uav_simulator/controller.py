@@ -211,6 +211,8 @@ class Controller:
         target_altitude_m = abs(current_wp[2])                   # stored as negative NED, convert back to positive
         self.setpoints['altitude'] = target_altitude_m
         self.setpoints['position'] = np.array([current_wp[0], current_wp[1], 0.0])
+
+        # --- Run stabilize control loop ---
         control = self._stabilize_mode(drone, dt)
 
         # --- Waypoint reached check ---
