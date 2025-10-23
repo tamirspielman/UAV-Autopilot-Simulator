@@ -98,6 +98,13 @@ class Controller:
         
         self.vel_x_pid.integral_limit = 0.1
         self.vel_y_pid.integral_limit = 0.1
+        
+        # RTL and LAND state tracking
+        self._rtl_waypoints = []
+        self._land_waypoints = []
+        self._rtl_complete = False
+        self._land_complete = False
+        
         logger.info("✓ Controller initialized with precision tuning")
 
     def compute_control(self, drone: Drone, dt: float) -> np.ndarray:
@@ -249,80 +256,104 @@ class Controller:
         return control
 
     def _rtl_mode(self, drone: Drone, dt: float) -> np.ndarray:
-        """Return to launch mode"""
-        current_pos = drone.estimated_state.position
-        current_altitude = -current_pos[2]
-        safe_altitude = max(5.0, current_altitude + 2.0)
-        distance_to_home_xy = np.linalg.norm(current_pos[:2] - self.launch_position[:2])
-        
-        if distance_to_home_xy > 2.0 or current_altitude < safe_altitude - 1.0:
-            target_position = np.array([0.0, 0.0, -safe_altitude])
-            self.setpoints['position'] = target_position
-            self.setpoints['altitude'] = safe_altitude
-            return self._stabilize_mode(drone, dt)
-        else:
-            self.setpoints['position'] = np.array([0.0, 0.0, 0.0])
-            self.setpoints['altitude'] = 0.0
+        """Return to launch mode - USING WAYPOINT APPROACH"""
+        # First time entering RTL, set up the waypoints
+        if not self._rtl_waypoints:
+            current_pos = drone.estimated_state.position
+            current_altitude = -current_pos[2]
+            home_xy_current_alt = np.array([self.launch_position[0], self.launch_position[1], -current_altitude])
+            home_land = np.array([self.launch_position[0], self.launch_position[1], 0.0])  # Ground level
             
-            if current_altitude < 0.3:
-                logger.info("✓ RTL complete - Landed at launch position")
+            self._rtl_waypoints = [home_xy_current_alt, home_land]
+            self._rtl_complete = False
+            logger.info(f"RTL: Created waypoints - Position then Land at home")
+        
+        # If RTL complete, stay in manual mode
+        if self._rtl_complete:
+            return np.zeros(4)
+        
+        # Use auto mode logic with RTL waypoints
+        current_wp = self._rtl_waypoints[0]
+        current_altitude_m = -drone.estimated_state.position[2]
+        
+        # Set target altitude and position
+        self.setpoints['altitude'] = -current_wp[2]  # Convert NED to altitude
+        self.setpoints['position'] = np.array([current_wp[0], current_wp[1], 0.0])
+        
+        # Run stabilize control loop
+        control = self._stabilize_mode(drone, dt)
+        
+        # Check if current waypoint is reached
+        current_pos = drone.estimated_state.position
+        horizontal_distance = np.linalg.norm(current_pos[:2] - current_wp[:2])
+        vertical_distance = abs(current_altitude_m - (-current_wp[2]))
+        
+        waypoint_reached = (
+            horizontal_distance < self.waypoint_radius and 
+            vertical_distance < self.waypoint_altitude_tolerance
+        )
+        
+        if waypoint_reached:
+            if len(self._rtl_waypoints) > 1:
+                # Move to next waypoint (landing)
+                self._rtl_waypoints.pop(0)
+                logger.info("RTL: Position reached, starting descent...")
+            else:
+                # Final waypoint reached - landed
+                self._rtl_complete = True
                 self.flight_mode = FlightMode.MANUAL
                 self.is_launched = False
-                return np.zeros(4)
-            
-            return self._controlled_descent(drone, dt)
+                logger.info("✓ RTL complete - Landed at launch position")
+        
+        return control
 
     def _land_mode(self, drone: Drone, dt: float) -> np.ndarray:
-        """Land at current position"""
+        """Land at current position - USING WAYPOINT APPROACH"""
+        # First time entering LAND, set up the waypoint
+        if not self._land_waypoints:
+            current_pos = drone.estimated_state.position
+            # Create land waypoint: current XY position at ground level
+            land_position = np.array([current_pos[0], current_pos[1], 0.0])
+            self._land_waypoints = [land_position]
+            self._land_complete = False
+            logger.info(f"LAND: Landing at current position N{current_pos[0]:.1f} E{current_pos[1]:.1f}")
+        
+        # If land complete, stay in manual mode
+        if self._land_complete:
+            return np.zeros(4)
+        
+        # Use auto mode logic with land waypoint
+        current_wp = self._land_waypoints[0]
+        current_altitude_m = -drone.estimated_state.position[2]
+        
+        # Set target altitude and position
+        self.setpoints['altitude'] = 0.0  # Ground level
+        self.setpoints['position'] = np.array([current_wp[0], current_wp[1], 0.0])
+        
+        # Run stabilize control loop
+        control = self._stabilize_mode(drone, dt)
+        
+        # Check if landed
         current_pos = drone.estimated_state.position
-        current_altitude = -current_pos[2]
+        horizontal_distance = np.linalg.norm(current_pos[:2] - current_wp[:2])
+        vertical_distance = current_altitude_m  # Distance to ground
         
-        if current_altitude < 0.3:
-            logger.info("✓ Landed at current position")
+        landed = (
+            horizontal_distance < self.waypoint_radius and 
+            vertical_distance < 0.3  # Close enough to ground
+        )
+        
+        if landed:
+            self._land_complete = True
             self.flight_mode = FlightMode.MANUAL
-            return np.zeros(4)
+            self.is_launched = False
+            logger.info("✓ Land complete - Landed at current position")
         
-        land_target = current_pos.copy()
-        land_target[2] = 0.0
-        self.setpoints['position'] = land_target
-        self.setpoints['altitude'] = 0.0
-        
-        return self._controlled_descent(drone, dt)
-
-    def _controlled_descent(self, drone: Drone, dt: float) -> np.ndarray:
-        """Controlled descent for landing"""
-        current_altitude = -drone.estimated_state.position[2]
-        
-        if current_altitude < 0.3:
-            return np.zeros(4)
-        
-        if current_altitude > 5.0:
-            descent_rate = 0.8
-        elif current_altitude > 2.0:
-            descent_rate = 0.4
-        else:
-            descent_rate = 0.15
-        
-        target_altitude = max(0.0, current_altitude - descent_rate * dt)
-        current_vertical_velocity = -drone.estimated_state.velocity[2]
-        velocity_error = -descent_rate - current_vertical_velocity
-        
-        throttle_adjustment = self.altitude_pid.compute(0, -velocity_error, dt)
-        hover_throttle = drone.get_hover_throttle()
-        throttle = hover_throttle + throttle_adjustment
-        
-        if current_altitude < 2.0:
-            throttle *= 0.9
-        if current_altitude < 1.0:
-            throttle *= 0.8
-        
-        throttle = np.clip(throttle, 0.2, 0.7)
-        
-        roll = self.roll_pid.compute(0.0, drone.estimated_state.orientation[0], dt)
-        pitch = self.pitch_pid.compute(0.0, drone.estimated_state.orientation[1], dt)
-        yaw = self.yaw_pid.compute(0.0, drone.estimated_state.orientation[2], dt)
-        
-        return np.array([throttle, roll, pitch, yaw])
+        return control
+    def set_launch_position(self, north: float, east: float, altitude: float = 0.0):
+        """Set custom launch position (for future use)"""
+        self.launch_position = np.array([north, east, -altitude])
+        logger.info(f"Launch position set to: N{north:.1f} E{east:.1f} Alt{altitude:.1f}m")
 
     def launch(self, target_altitude: float = 2.0):
         """Launch the drone to target altitude"""
@@ -338,12 +369,21 @@ class Controller:
         self.setpoints['position'] = launch_target
         self.setpoints['yaw'] = 0.0
 
+        # Reset all PIDs
         self.altitude_pid.reset()
         self.pos_x_pid.reset()
         self.pos_y_pid.reset()
         self.roll_pid.reset()
         self.pitch_pid.reset()
         self.yaw_pid.reset()
+        self.vel_x_pid.reset()
+        self.vel_y_pid.reset()
+        
+        # Reset RTL/LAND states
+        self._rtl_waypoints = []
+        self._land_waypoints = []
+        self._rtl_complete = False
+        self._land_complete = False
         
         self.set_flight_mode(FlightMode.STABILIZE)
         self.is_launched = True
@@ -386,12 +426,24 @@ class Controller:
         """Change flight mode"""
         if mode != self.flight_mode:
             logger.info(f"Mode change: {self.flight_mode.value} → {mode.value}")
+            
+            # Reset all PIDs on mode change
             self.altitude_pid.reset()
             self.roll_pid.reset()
             self.pitch_pid.reset()
             self.yaw_pid.reset()
             self.pos_x_pid.reset()
             self.pos_y_pid.reset()
+            self.vel_x_pid.reset()
+            self.vel_y_pid.reset()
+            
+            # Reset RTL/LAND states when leaving those modes
+            if self.flight_mode in [FlightMode.RTL, FlightMode.LAND]:
+                self._rtl_waypoints = []
+                self._land_waypoints = []
+                self._rtl_complete = False
+                self._land_complete = False
+            
             self.flight_mode = mode
 
     def get_status(self) -> Dict[str, Any]:
@@ -406,5 +458,6 @@ class Controller:
                 'altitude': self.setpoints['altitude'],
                 'position': self.setpoints['position'].tolist(),
                 'yaw': self.setpoints['yaw']
-            }
+            },
+            'launch_position': self.launch_position.tolist()
         }
