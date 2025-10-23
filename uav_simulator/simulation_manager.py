@@ -208,10 +208,6 @@ class SimulationManager:
         """Change flight mode"""
         self.controller.set_flight_mode(mode)
     
-    def emergency_land(self):
-        """Emergency landing"""
-        self.controller.emergency_land()
-    
     @property
     def waypoints(self):
         """Get waypoints from controller"""
@@ -317,8 +313,6 @@ if HAS_DASH and HAS_PLOTLY:
                                     dbc.Button("🛬 Land Here", id='land-btn', 
                                               color="secondary", className='w-100 mb-2', size='lg'),
                                     html.Hr(),
-                                    dbc.Button("⚠️ EMERGENCY LAND", id='emergency-btn', 
-                                              color="danger", className='w-100', size='lg')
                                 ])
                             ])
                         ], width=4),
@@ -486,8 +480,7 @@ if HAS_DASH and HAS_PLOTLY:
                  Input('clear-wp-btn', 'n_clicks'),
                  Input('mission-btn', 'n_clicks'),
                  Input('rtl-btn', 'n_clicks'),
-                 Input('land-btn', 'n_clicks'),
-                 Input('emergency-btn', 'n_clicks')],
+                 Input('land-btn', 'n_clicks')],
                 [State('wp-north', 'value'),
                  State('wp-east', 'value'),
                  State('wp-alt', 'value'),
@@ -524,10 +517,6 @@ if HAS_DASH and HAS_PLOTLY:
                     
                     elif button_id == 'land-btn':
                         self.sim.set_flight_mode(FlightMode.LAND)
-                    
-                    elif button_id == 'emergency-btn':
-                        self.sim.emergency_land()
-                
                 except Exception as e:
                     logger.error(f"Button handler error: {e}")
                 

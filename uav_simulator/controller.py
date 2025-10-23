@@ -405,12 +405,6 @@ class Controller:
         self.set_flight_mode(FlightMode.AUTO)
         logger.info(f"🎯 Mission started with {len(self.waypoints)} waypoints")
 
-    def emergency_land(self):
-        """Emergency landing"""
-        logger.warning("⚠️ EMERGENCY LANDING!")
-        self.mission_complete = True
-        self.flight_mode = FlightMode.LAND
-
     def set_flight_mode(self, mode: FlightMode):
         """Change flight mode"""
         if mode != self.flight_mode:
