@@ -88,11 +88,10 @@ class Drone:
         self.motor_speeds = np.clip(speeds, self.min_rpm, self.max_rpm)
     
     def calculate_thrust(self) -> float:
-        """Calculate total thrust from motor speeds"""
-        # Convert RPM to rad/s
         motor_rads = self.motor_speeds * (2 * np.pi / 60)
-        # Sum thrust from all motors
-        total_thrust = float(self.thrust_coeff * np.sum(motor_rads ** 2))
+        effective_k_t = 7.0e-6
+        thrust_per_motor = effective_k_t * (motor_rads ** 2)
+        total_thrust = float(np.sum(thrust_per_motor))
         return total_thrust
     
     def calculate_torques(self) -> np.ndarray:
@@ -119,15 +118,14 @@ class Drone:
         return np.array([roll_torque, pitch_torque, yaw_torque])
     
     def get_hover_throttle(self) -> float:
-        """
-        Calculate theoretical hover throttle with better accuracy
-        """
         weight = self.mass * 9.80665  
         hover_thrust_per_motor = weight / 4.0
+        omega_hover = np.sqrt(hover_thrust_per_motor / 7.0e-6)
+        rpm_hover = omega_hover * (60 / (2 * np.pi))
         omega_rads = np.sqrt(hover_thrust_per_motor / self.thrust_coeff)
         rpm = omega_rads * (60 / (2 * np.pi))
-        throttle = (rpm - self.min_rpm) / (self.max_rpm - self.min_rpm)
-        return float(np.clip(throttle, 0.45, 0.55)) 
+        throttle = (rpm_hover - self.min_rpm) / (self.max_rpm - self.min_rpm)
+        return float(np.clip(throttle, 0.55, 0.6))
     def get_telemetry(self) -> Dict[str, Any]:
         """Get telemetry data for display"""
         return {

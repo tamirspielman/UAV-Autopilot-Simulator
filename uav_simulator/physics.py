@@ -66,14 +66,28 @@ class Physics:
         new_state.acceleration = derivative['velocity']
         new_state.timestamp = drone.true_state.timestamp + dt
 
-        # Ground protection
-        if new_state.position[2] >= self.ground_level:
-            if current_thrust < weight_force * 0.8:
-                new_state.position[2] = self.ground_level
-                if new_state.velocity[2] > 0:
-                    new_state.velocity[2] = 0.0
-                elif new_state.velocity[2] < 0 and current_thrust < weight_force:
-                    new_state.velocity[2] *= 0.5
+        # IMPROVED GROUND COLLISION HANDLING - FIXED BOUNCING
+        current_altitude = -new_state.position[2]  # Convert NED to altitude
+        
+        if current_altitude <= 0.0:  # On or below ground
+            new_state.position[2] = self.ground_level  # Lock to ground
+            
+            # Stop all vertical movement
+            if new_state.velocity[2] > 0:  # Moving downward in NED (positive Z)
+                new_state.velocity[2] = 0.0
+            
+            # Stop all horizontal movement when on ground (ground friction)
+            if current_thrust < weight_force * 1.1:  # Not enough thrust to take off
+                new_state.velocity[0] *= 0.3  # Strong ground friction X
+                new_state.velocity[1] *= 0.3  # Strong ground friction Y
+                
+                # If thrust is very low, stop all horizontal movement
+                if current_thrust < weight_force * 0.8:
+                    new_state.velocity[0] = 0.0
+                    new_state.velocity[1] = 0.0
+                    
+            # Reset angular velocities when on ground (prevent spinning on ground)
+            new_state.angular_velocity *= 0.1
 
         drone.true_state = new_state
         drone.estimated_state = DroneState()
@@ -98,9 +112,6 @@ class Physics:
         m3 = throttle - pitch + roll + yaw 
 
         motor_commands = np.array([m0, m1, m2, m3])
-    
-        # REMOVED: The normalization that was causing issues
-        # This was fighting the controller and reducing responsiveness
     
         # Simple clipping to valid range
         motor_commands = np.clip(motor_commands, 0.0, 1.0)
