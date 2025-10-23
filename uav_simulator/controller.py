@@ -202,7 +202,6 @@ class Controller:
         self.control_output = np.array([throttle, roll_output, pitch_output, yaw_output])
         return self.control_output
     def _auto_mode(self, drone: Drone, dt: float) -> np.ndarray:
-        """AUTO mode — synchronized horizontal and vertical climb, correct NED handling."""
         if not self.waypoints or self.mission_complete:
             return self._stabilize_mode(drone, dt)
 
@@ -210,25 +209,8 @@ class Controller:
         current_wp = self.waypoints[self.current_waypoint_index]
         current_altitude_m = -drone.estimated_state.position[2]  # convert NED down → positive altitude
         target_altitude_m = abs(current_wp[2])                   # stored as negative NED, convert back to positive
-
-        # --- Aggressive climb rate (sync with XY) ---
-        altitude_error = target_altitude_m - current_altitude_m
-        # Push altitude toward target aggressively
-        climb_speed = np.clip(abs(altitude_error) * 1.5, 2.0, self.max_climb_rate * 2.0)
-        new_altitude = current_altitude_m + np.sign(altitude_error) * climb_speed * dt
-
-        # Don’t overshoot
-        if (altitude_error > 0 and new_altitude > target_altitude_m) or \
-           (altitude_error < 0 and new_altitude < target_altitude_m):
-            new_altitude = target_altitude_m
-
-        # ✅ Set positive altitude (up)
-        self.setpoints['altitude'] = new_altitude
-
-        # ✅ Set XY waypoint (Z handled separately)
+        self.setpoints['altitude'] = target_altitude_m
         self.setpoints['position'] = np.array([current_wp[0], current_wp[1], 0.0])
-
-        # --- Run stabilize control loop ---
         control = self._stabilize_mode(drone, dt)
 
         # --- Waypoint reached check ---
