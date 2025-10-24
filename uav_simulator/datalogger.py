@@ -9,13 +9,17 @@ from collections import deque
 from .drone import Drone
 from .controller import Controller
 from .utils import logger, normalize_angles
+
 class DataLogger:
     def __init__(self, log_directory: str = "flight_logs"):
+        """Initialize data logger with CSV file storage"""
         self.log_directory = log_directory
         self.current_log_file = None
         self.csv_writer = None
         self.csv_file = None
         os.makedirs(self.log_directory, exist_ok=True)
+        
+        # Define CSV column names
         self.fieldnames = [
             'timestamp', 'simulation_time',
             'position_x', 'position_y', 'position_z',
@@ -27,7 +31,9 @@ class DataLogger:
         self.start_time = time.time()
         self.logging_enabled = True
         self.start_new_log()  
+        
     def start_new_log(self):
+        """Create new CSV log file with timestamp"""
         if not self.logging_enabled:
             return  
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -43,13 +49,18 @@ class DataLogger:
             self.logging_enabled = False
     
     def log_data(self, drone: Drone, controller: Controller):
+        """Log current drone state and control outputs to CSV"""
         if not self.logging_enabled or self.csv_writer is None or self.csv_file is None:
             return
         try:
             current_time = time.time()
             simulation_time = current_time - self.start_time
+            
+            # Convert NED coordinates to user-friendly altitude
             altitude = -drone.true_state.position[2]  
             vertical_velocity = -drone.true_state.velocity[2]  
+            
+            # Create data row
             row = {
                 'timestamp': current_time,
                 'simulation_time': simulation_time,
@@ -68,25 +79,34 @@ class DataLogger:
                 'control_yaw': controller.control_output[3],
                 'flight_mode': controller.flight_mode.value
             }
+            
             self.csv_writer.writerow(row)
             self.csv_file.flush()
         except Exception as e:
             if "Error writing to log file" in str(e):
                 logger.error(f"Error writing to log file: {e}")
+                
     def stop_logging(self):
+        """Close the current log file"""
         if self.csv_file:
             self.csv_file.close()
             self.csv_file = None
             self.csv_writer = None
             logger.info(f"Closed flight log: {self.current_log_file}")
+            
     def analyze_log(self, log_file_path: str) -> Dict[str, Any]:
+        """Analyze flight log and compute performance metrics"""
         try:
+            # Read CSV into pandas DataFrame
             df = pd.read_csv(log_file_path)
         except Exception as e:
             logger.error(f"Failed to read log file: {e}")
             return {}
+            
         if df.empty:
             return {}
+            
+        # Compute comprehensive flight statistics
         analysis = {
             'file_path': log_file_path,
             'duration_seconds': float(df['simulation_time'].max()) if 'simulation_time' in df.columns else 0.0,
@@ -112,11 +132,15 @@ class DataLogger:
         return analysis
     
     def generate_report(self, log_file_path: Optional[str] = None) -> str:
+        """Generate formatted text report from log analysis"""
         if log_file_path is None:
             return "No log file specified"
+            
         analysis = self.analyze_log(log_file_path)
         if not analysis:
             return "No data available for report"
+            
+        # Create comprehensive flight report
         report = f"""
 FLIGHT ANALYSIS REPORT
 ======================
@@ -149,7 +173,9 @@ FLIGHT MODES
 Modes Used: {', '.join(analysis['flight_modes_used'])}
 """
         return report
+        
     def get_recent_logs(self, count: int = 5) -> List[str]:
+        """Get list of most recent log files"""
         try:
             log_files = []
             for file in os.listdir(self.log_directory):
@@ -157,6 +183,7 @@ Modes Used: {', '.join(analysis['flight_modes_used'])}
                     file_path = os.path.join(self.log_directory, file)
                     mod_time = os.path.getmtime(file_path)
                     log_files.append((file_path, mod_time))
+            # Sort by modification time (newest first)
             log_files.sort(key=lambda x: x[1], reverse=True)
             return [file[0] for file in log_files[:count]]
         except Exception as e:

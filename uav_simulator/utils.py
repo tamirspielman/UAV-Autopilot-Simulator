@@ -4,7 +4,9 @@ from enum import Enum
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 class FlightMode(Enum):
+    """Enumeration of available flight modes"""
     MANUAL = "manual"
     STABILIZE = "stabilize"
     ALTITUDE_HOLD = "altitude_hold"
@@ -16,10 +18,15 @@ class FlightMode(Enum):
     TAKEOFF = "takeoff"
 
 def normalize_angles(angles: np.ndarray) -> np.ndarray:
+    """Normalize angles to [-π, π] range"""
     return np.arctan2(np.sin(angles), np.cos(angles))
+
 def wrap_angle(angle: float) -> float:
+    """Wrap a single angle to [-π, π] range"""
     return (angle + np.pi) % (2 * np.pi) - np.pi
+
 def rotation_matrix(angles: np.ndarray) -> np.ndarray:
+    """Create 3D rotation matrix from Euler angles (roll, pitch, yaw)"""
     roll, pitch, yaw = angles
     cr, sr = np.cos(roll), np.sin(roll)
     cp, sp = np.cos(pitch), np.sin(pitch)
@@ -30,7 +37,9 @@ def rotation_matrix(angles: np.ndarray) -> np.ndarray:
         [-sp, cp*sr, cp*cr]
     ])
     return R
+
 def check_imports() -> Dict[str, bool]:
+    """Check availability of optional dependencies for enhanced features"""
     imports: Dict[str, bool] = {}
     imports['numpy'] = True
     try:
