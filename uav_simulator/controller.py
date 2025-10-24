@@ -83,10 +83,8 @@ class Controller:
 
         self.waypoint_radius = 0.5  # Looser for smoother flight
         self.waypoint_altitude_tolerance = 0.3  # Reasonable altitude tolerance
-        self.max_xy_velocity = 3.0  # Reduced for stability
-        self.max_tilt_angle = 0.52  # Reduced max tilt (30 degrees)
-        self.max_climb_rate = 1.5   # Conservative climb rate
-        self.max_descent_rate = 1.2 # Conservative descent rate
+        self.max_velocity = 3.0  # Reduced for stability
+        self.max_tilt_angle = 0.55  # Reduced max tilt (30 degrees) 
         
         # Path planning parameters
         self.grid_resolution = 1.0
@@ -308,13 +306,11 @@ class Controller:
         altitude_error = target_altitude_ned - current_altitude_ned
         current_vertical_velocity_ned = drone.estimated_state.velocity[2]
         current_altitude_m = -current_altitude_ned
-        
-        # Conservative altitude control
-        altitude_velocity_gain = 0.8  # Reduced gain
+        altitude_velocity_gain = 0.8 
         desired_vertical_velocity = np.clip(
             altitude_error * altitude_velocity_gain,
-            -self.max_climb_rate,
-            self.max_descent_rate
+            -self.max_velocity,
+            self.max_velocity
         )
         
         velocity_error = desired_vertical_velocity - current_vertical_velocity_ned
