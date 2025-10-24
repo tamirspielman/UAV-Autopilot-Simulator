@@ -444,21 +444,40 @@ class Controller:
 
         return control
     
-    def _compute_adaptive_landing_throttle(self, drone: Drone, current_altitude: float) -> float:
+    def _compute_adaptive_landing_throttle(self, drone: Drone, current_altitude: float, mode: str = "LAND") -> float:
         hover = float(drone.get_hover_throttle())
-        if current_altitude > 3.0:
-            throttle = hover - 0.70
-        elif current_altitude > 2.0:
-            t = (current_altitude - 2.0)
-            throttle = hover - (0.55 + 0.15 * t)
-        elif current_altitude > 1.0:
-            t = (current_altitude - 1.0)
-            throttle = hover - (0.25 + 0.30 * t)
-        else:
-            soft_factor = (current_altitude / 1.0) ** 1.5
-            throttle = hover - (0.05 + 0.20 * soft_factor)
+        if mode == "RTL":
+            # RTL wants faster descent overall, but still soft near ground
+            if current_altitude > 5.0:
+                throttle = hover - 0.75
+            elif current_altitude > 3.0:
+                t = (current_altitude - 3.0) / 2.0
+                throttle = hover - (0.60 + 0.15 * t)
+            elif current_altitude > 1.5:
+                t = (current_altitude - 1.5) / 1.5
+                throttle = hover - (0.35 + 0.25 * t)
+            else:
+                # soft curve below 1.5m
+                soft_factor = (current_altitude / 1.5) ** 1.7
+                throttle = hover - (0.05 + 0.25 * soft_factor)
 
-        return float(np.clip(throttle, 0.03, 0.95))
+        else:  # LAND
+            # Start fast but slow sharply below 2m
+            if current_altitude > 3.0:
+                throttle = hover - 0.65
+            elif current_altitude > 2.0:
+                t = (current_altitude - 2.0)
+                throttle = hover - (0.45 + 0.20 * t)
+            elif current_altitude > 1.0:
+                t = (current_altitude - 1.0)
+                throttle = hover - (0.20 + 0.25 * t)
+            else:
+                # smooth nonlinear softening near ground
+                soft_factor = (current_altitude / 1.0) ** 2.0
+                throttle = hover - (0.05 + 0.15 * soft_factor)
+
+        return float(np.clip(throttle, 0.05, 0.95))
+
 
     def _rtl_mode(self, drone: Drone, dt: float) -> np.ndarray:
         current_pos = drone.estimated_state.position
@@ -511,7 +530,7 @@ class Controller:
             self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], 0.0])
             self.setpoints['altitude'] = 0.0
             control = self._stabilize_mode(drone, dt)
-            control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude)
+            control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude, mode="RTL")
             logger.debug(f"RTL: soft-landing from {current_altitude:.2f}m, thr -> {control[0]:.3f}")
             return control
 
@@ -552,7 +571,7 @@ class Controller:
             self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], 0.0])
             self.setpoints['altitude'] = 0.0
             control = self._stabilize_mode(drone, dt)
-            control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude)
+            control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude, mode="LAND")
             logger.debug(f"RTL: adaptive descent from {current_altitude:.2f}m, thr -> {control[0]:.3f}")
             return control
 
@@ -561,9 +580,8 @@ class Controller:
             # lock XY, then apply soft throttle mapping
             self.setpoints['position'] = np.array([current_pos[0], current_pos[1], 0.0])
             self.setpoints['altitude'] = 0.0
-
             control = self._stabilize_mode(drone, dt)
-            control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude)
+            control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude, mode="LAND")
             logger.debug(f"LAND: soft-landing from {current_altitude:.2f}m, thr -> {control[0]:.3f}")
             return control
 
