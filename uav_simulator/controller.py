@@ -106,9 +106,12 @@ class Controller:
         self.vel_y_pid = PIDController(0.3, 0.003, 0.08, (-0.4, 0.4))
         self.vel_x_pid.integral_limit = 0.05
         self.vel_y_pid.integral_limit = 0.05
-        
-        self._rtl_started = False
         self._land_started = False
+        self._land_initial_altitude = None
+        self._land_burst_done = False
+        self._rtl_started = False
+        self._rtl_initial_altitude = None
+        self._rtl_burst_done = False
         self._mission_transition_timer = 0.0
         
         logger.info("✓ Controller initialized with conservative PID gains")
@@ -259,25 +262,27 @@ class Controller:
 
     def _optimize_waypoints(self) -> List[np.ndarray]:
         """Optimize waypoint path using A* between each consecutive pair"""
-        if not self.waypoints or len(self.waypoints) < 2:
-            return self.waypoints
-        
-        optimized_path = [self.launch_position]
-        
+        if not self.waypoints:
+            return []
+        if len(self.waypoints) < 2:
+            return self.waypoints.copy()  # Return copy of single waypoint
+        optimized_path = []
+        current_position = self.launch_position
         for i in range(len(self.waypoints)):
-            start = optimized_path[-1]
             goal = self.waypoints[i]
-            
-            # Run A* between consecutive waypoints
-            segment_path = self._plan_optimal_path(start, goal)
-            
+        
+            # Run A* from current position to waypoint
+            segment_path = self._plan_optimal_path(current_position, goal)
+        
             if segment_path:
-                # Add path segment (skip first point as it's already in path)
+                # Add path segment (skip first point as it's the current position)
                 optimized_path.extend(segment_path[1:])
+                current_position = segment_path[-1]  # Update current position
             else:
                 # Fallback: direct path
                 optimized_path.append(goal)
-        
+                current_position = goal
+    
         return optimized_path
 
     def compute_control(self, drone: Drone, dt: float) -> np.ndarray:
@@ -323,7 +328,7 @@ class Controller:
         
         # Always allow some position control, but be more conservative at low altitude
         position_gain_scale = 1.0
-        if current_altitude_m < 2.0:
+        if current_altitude_m < 1.0:
             position_gain_scale = 0.5  # Reduce position control at low altitude
         
         max_pos_error = 10.0
@@ -384,34 +389,40 @@ class Controller:
 
     def _auto_mode(self, drone: Drone, dt: float) -> np.ndarray:
         """Auto mode: follow optimized waypoint mission"""
+        # Check if optimized_waypoints is empty or mission is complete
         if not self.optimized_waypoints or self.mission_complete:
             return self._stabilize_mode(drone, dt)
-            
+        
+        # Check if current_waypoint_index is valid
+        if self.current_waypoint_index >= len(self.optimized_waypoints):
+            self.mission_complete = True
+            return self._stabilize_mode(drone, dt)
+
         current_wp = self.optimized_waypoints[self.current_waypoint_index]
         current_altitude_m = -drone.estimated_state.position[2]
         target_altitude_m = abs(current_wp[2])
-        
+
         # Set current waypoint as target
         self.setpoints['altitude'] = target_altitude_m
         self.setpoints['position'] = np.array([current_wp[0], current_wp[1], 0.0])
-        
+
         # Gentle transition handling - no aggressive boosts
         if self.current_waypoint_index == 0 and self._mission_transition_timer < 2.0:
             self._mission_transition_timer += dt
             # Let the drone stabilize naturally
-        
+
         control = self._stabilize_mode(drone, dt)
-        
+
         # Check waypoint reaching condition
         current_pos = drone.estimated_state.position
         horizontal_distance = np.linalg.norm(current_pos[:2] - current_wp[:2])
         vertical_distance = abs(current_altitude_m - target_altitude_m)
-        
+
         waypoint_reached = (
             horizontal_distance < self.waypoint_radius and 
             vertical_distance < self.waypoint_altitude_tolerance
         )
-        
+
         if waypoint_reached:
             if self.current_waypoint_index < len(self.optimized_waypoints) - 1:
                 # Advance to next waypoint
@@ -420,7 +431,7 @@ class Controller:
                 next_wp = self.optimized_waypoints[self.current_waypoint_index]
                 logger.info(f"✓ Waypoint {self.current_waypoint_index}/{len(self.optimized_waypoints)} reached! "
                             f"Next: N{next_wp[0]:.1f} E{next_wp[1]:.1f} Alt{abs(next_wp[2]):.1f}m")
-                
+
                 # Reset PIDs when switching waypoints for clean transition
                 self.pos_x_pid.reset()
                 self.pos_y_pid.reset()
@@ -432,86 +443,138 @@ class Controller:
                 logger.info("✓ All waypoints reached! Holding position.")
 
         return control
+    
+    def _compute_adaptive_landing_throttle(self, drone: Drone, current_altitude: float) -> float:
+        hover = float(drone.get_hover_throttle())
+        if current_altitude > 3.0:
+            throttle = hover - 0.70
+        elif current_altitude > 2.0:
+            t = (current_altitude - 2.0)
+            throttle = hover - (0.55 + 0.15 * t)
+        elif current_altitude > 1.0:
+            t = (current_altitude - 1.0)
+            throttle = hover - (0.25 + 0.30 * t)
+        else:
+            soft_factor = (current_altitude / 1.0) ** 1.5
+            throttle = hover - (0.05 + 0.20 * soft_factor)
+
+        return float(np.clip(throttle, 0.03, 0.95))
 
     def _rtl_mode(self, drone: Drone, dt: float) -> np.ndarray:
-        """Return-to-launch: return to home position and land"""
         current_pos = drone.estimated_state.position
         current_altitude = -current_pos[2]
         distance_to_home_xy = np.linalg.norm(current_pos[:2] - self.launch_position[:2])
-        
-        if distance_to_home_xy > self.waypoint_radius:
-            # First phase: navigate to home XY position
-            if not self._rtl_started:
-                logger.info("RTL: Moving to home position")
-                self._rtl_started = True
-                
-            self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], -current_altitude])
-            self.setpoints['altitude'] = current_altitude
-            return self._stabilize_mode(drone, dt)
-            
-        if current_altitude > 0.5:
-            # Second phase: descend at home position
+        approach_radius = max(self.waypoint_radius, 1.0)
+        if not self._rtl_started:
+            self._rtl_started = True
+            self._rtl_burst_done = False
+            self._rtl_initial_altitude = float(current_altitude)
+            logger.info(f"RTL: start at {self._rtl_initial_altitude:.2f}m — initial burst enabled")
+
+        # initial 1m burst so it doesn't stall in the descent when starting RTL
+        if not self._rtl_burst_done:
+            if self._rtl_initial_altitude - current_altitude >= 1.0 or current_altitude <= 1.0:
+                self._rtl_burst_done = True
+                logger.debug("RTL: initial burst complete")
+            else:
+                hover = float(drone.get_hover_throttle())
+                burst_throttle = float(np.clip(hover - 0.60, 0.02, 0.95))
+                # command simultaneous XY->home and allow throttle burst to descend ~1m quickly
+                self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], -1.0])
+                control = self._stabilize_mode(drone, dt)
+                control[0] = burst_throttle
+                logger.debug(f"RTL burst: alt {current_altitude:.2f} -> throttle {control[0]:.3f}")
+                return control
+
+        # Phase: move toward home XY while descending to 2m (simultaneous XY + altitude)
+        if distance_to_home_xy > approach_radius:
+            self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], -2.0])
+            self.setpoints['altitude'] = 2.0
+            control = self._stabilize_mode(drone, dt)
+            # above 2m we want faster descent (allow control to go lower throttle if needed)
+            if current_altitude > 2.0:
+                control[0] = float(np.clip(control[0], 0.03, 0.95))
+            logger.debug(f"RTL: enroute to home XY, alt {current_altitude:.2f}, thr {control[0]:.3f}")
+            return control
+
+        # Close to home XY — if above 2m, descend to 2m then soft land
+        if current_altitude > 2.0:
+            self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], -2.0])
+            self.setpoints['altitude'] = 2.0
+            control = self._stabilize_mode(drone, dt)
+            control[0] = float(np.clip(control[0], 0.03, 0.95))
+            logger.debug(f"RTL: co-located XY, descending to 2m, alt {current_altitude:.2f}, thr {control[0]:.3f}")
+            return control
+
+        # Soft-landing at home when <= 2m
+        if current_altitude > 0.05:
             self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], 0.0])
             self.setpoints['altitude'] = 0.0
             control = self._stabilize_mode(drone, dt)
-            
-            # Gentle throttle reduction for smooth landing
-            throttle_reduction = 0.0
-            if current_altitude > 3.0:
-                throttle_reduction = 0.1
-            elif current_altitude > 1.5:
-                throttle_reduction = 0.2
-            else:
-                throttle_reduction = 0.3
-                
-            control[0] = control[0] * (1.0 - throttle_reduction)
-            control[0] = max(control[0], 0.35)  # Conservative minimum throttle
-            
-            logger.debug(f"RTL: Descending from {current_altitude:.1f}m, throttle: {control[0]:.2f}")
+            control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude)
+            logger.debug(f"RTL: soft-landing from {current_altitude:.2f}m, thr -> {control[0]:.3f}")
             return control
-        else:
-            # Landing complete
-            logger.info("✓ RTL complete - Landed at launch position")
-            self.flight_mode = FlightMode.MANUAL
-            self.is_launched = False
-            self._rtl_started = False
-            return np.zeros(4)
 
+        # Landed
+        logger.info("✓ RTL complete - Landed at launch position")
+        self.flight_mode = FlightMode.MANUAL
+        self.is_launched = False
+        self._rtl_started = False
+        self._rtl_initial_altitude = None
+        self._rtl_burst_done = False
+        return np.zeros(4)
     def _land_mode(self, drone: Drone, dt: float) -> np.ndarray:
-        """Land mode: descend vertically at current position"""
         current_pos = drone.estimated_state.position
-        current_altitude = -current_pos[2]
-        
-        if current_altitude > 0.5:
-            if not self._land_started:
-                logger.info("LAND: Starting descent at current position")
-                self._land_started = True
-                
-            self.setpoints['position'] = np.array([current_pos[0], current_pos[1], 0.0])
+        current_altitude = -current_pos[2]  
+        if not self._land_started:
+            self._land_started = True
+            self._land_burst_done = False
+            self._land_initial_altitude = float(current_altitude)
+            logger.info(f"LAND: start at {self._land_initial_altitude:.2f}m — initial burst enabled")
+
+        # If we haven't done the 1m burst yet, do it until we've dropped ~1.0m
+        if not self._land_burst_done:
+            # If starting altitude < 1m, skip burst
+            if self._land_initial_altitude - current_altitude >= 1.0 or current_altitude <= 1.0:
+                self._land_burst_done = True
+                logger.debug("LAND: initial burst complete")
+            else:
+                # aggressive throttle (fast first-meter descent)
+                hover = float(drone.get_hover_throttle())
+                burst_throttle = float(np.clip(hover - 0.60, 0.02, 0.95))
+                # Keep XY on current position while bursting down
+                self.setpoints['position'] = np.array([current_pos[0], current_pos[1], 0.0])
+                control = self._stabilize_mode(drone, dt)
+                control[0] = burst_throttle
+                logger.debug(f"LAND burst: alt {current_altitude:.2f} -> throttle {control[0]:.3f}")
+                return control
+        if current_altitude > 0.1:
+            self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], 0.0])
             self.setpoints['altitude'] = 0.0
             control = self._stabilize_mode(drone, dt)
-            
-            # Gentle descent with throttle reduction
-            throttle_reduction = 0.0
-            if current_altitude > 3.0:
-                throttle_reduction = 0.1
-            elif current_altitude > 1.5:
-                throttle_reduction = 0.2
-            else:
-                throttle_reduction = 0.3
-                
-            control[0] = control[0] * (1.0 - throttle_reduction)
-            control[0] = max(control[0], 0.35)  # Conservative minimum throttle
-            
-            logger.debug(f"LAND: Descending from {current_altitude:.1f}m, throttle: {control[0]:.2f}")
+            control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude)
+            logger.debug(f"RTL: adaptive descent from {current_altitude:.2f}m, thr -> {control[0]:.3f}")
             return control
-        else:
-            # Landing complete
-            logger.info("✓ Land complete - Landed at current position")
-            self.flight_mode = FlightMode.MANUAL
-            self.is_launched = False
-            self._land_started = False
-            return np.zeros(4)
+
+        # Soft-landing phase when <= 2.0m: use soft throttle curve
+        if current_altitude > 0.05:
+            # lock XY, then apply soft throttle mapping
+            self.setpoints['position'] = np.array([current_pos[0], current_pos[1], 0.0])
+            self.setpoints['altitude'] = 0.0
+
+            control = self._stabilize_mode(drone, dt)
+            control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude)
+            logger.debug(f"LAND: soft-landing from {current_altitude:.2f}m, thr -> {control[0]:.3f}")
+            return control
+
+        # Landed
+        logger.info("✓ Land complete - landed at current position")
+        self.flight_mode = FlightMode.MANUAL
+        self.is_launched = False
+        self._land_started = False
+        self._land_initial_altitude = None
+        self._land_burst_done = False
+        return np.zeros(4)
 
     def set_launch_position(self, north: float, east: float, altitude: float = 0.0):
         """Set the launch position for RTL reference"""
@@ -569,21 +632,25 @@ class Controller:
         if not self.waypoints:
             logger.warning("No waypoints set!")
             return
-            
+
         if not self.is_launched:
             logger.warning("Not launched yet! Auto-launching to 2m...")
             self.launch(2.0)
             return
-        
+
         # Optimize path using A* if enabled
         if self.use_path_optimization:
             logger.info("🎯 Optimizing mission path with A* algorithm...")
             self.optimized_waypoints = self._optimize_waypoints()
+            # If optimization failed, fall back to original waypoints
+            if not self.optimized_waypoints:
+                logger.warning("Path optimization failed, using original waypoints")
+                self.optimized_waypoints = self.waypoints.copy()
             logger.info(f"📊 Optimization complete: {len(self.waypoints)} user waypoints → "
                        f"{len(self.optimized_waypoints)} optimized waypoints")
         else:
-            self.optimized_waypoints = self.waypoints
-        
+            self.optimized_waypoints = self.waypoints.copy()
+
         # Reset PIDs for clean mission start
         self.altitude_pid.reset()
         self.pos_x_pid.reset()
@@ -591,7 +658,7 @@ class Controller:
         self.vel_x_pid.reset()
         self.vel_y_pid.reset()
         self._mission_transition_timer = 0.0
-            
+        
         self.current_waypoint_index = 0
         self.mission_complete = False
         self.set_flight_mode(FlightMode.AUTO)
