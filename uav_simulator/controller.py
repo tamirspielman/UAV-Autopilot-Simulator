@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 from .utils import FlightMode, logger
 from .drone import Drone
 
-#TODO: fix landing & RTL.
+#TODO:
+# fix landing & RTL.
 # Implement wind disturbance model
 
 @dataclass(order=True)
@@ -97,8 +98,8 @@ class Controller:
         self.is_launched = False
         
         # Flight parameters
-        self.waypoint_radius = 0.5  
-        self.waypoint_altitude_tolerance = 0.5  
+        self.waypoint_radius = 0.1  
+        self.waypoint_altitude_tolerance = 0.1  
         self.max_xy_velocity = 5.0
         self.max_tilt_angle = 0.785 
         self.max_climb_rate = self.max_xy_velocity
