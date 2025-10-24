@@ -1,11 +1,22 @@
 import numpy as np
-from typing import List, Dict, Any, Tuple
+import heapq
+from typing import List, Dict, Any, Tuple, Optional
+from dataclasses import dataclass, field
 from .utils import FlightMode, logger
 from .drone import Drone
 
-#TODO:optimize flight path, the vertical and horizontal speed are the same so i think thats why its flies too high.
-# fix landing & RTL.
+#TODO: fix landing & RTL.
 # Implement wind disturbance model
+
+@dataclass(order=True)
+class PathNode:
+    """A* search node for path planning"""
+    f_cost: float
+    position: Tuple[float, float, float] = field(compare=False)
+    g_cost: float = field(compare=False)
+    h_cost: float = field(compare=False)
+    parent: Optional['PathNode'] = field(default=None, compare=False)
+
 
 class PIDController:
     def __init__(self, kp: float, ki: float, kd: float,
@@ -67,6 +78,7 @@ class PIDController:
         self.prev_error = 0.0
         self.prev_derivative = 0.0
 
+
 class Controller:
     def __init__(self):
         """Main flight controller managing all flight modes and PID loops"""
@@ -77,6 +89,7 @@ class Controller:
             'yaw': 0.0
         }
         self.waypoints: List[np.ndarray] = []
+        self.optimized_waypoints: List[np.ndarray] = []  # A* optimized path
         self.current_waypoint_index = 0
         self.mission_complete = False
         self.launch_position = np.array([0.0, 0.0, 0.0])
@@ -90,6 +103,13 @@ class Controller:
         self.max_tilt_angle = 0.785 
         self.max_climb_rate = self.max_xy_velocity
         self.max_descent_rate = 3.0
+        
+        # Path planning parameters
+        self.grid_resolution = 1.0
+        self.distance_weight = 1.0
+        self.altitude_weight = 0.4  # Penalize altitude changes
+        self.energy_weight = 0.3    # Penalize energy consumption
+        self.use_path_optimization = True
         
         # Initialize PID controllers for all control axes
         self.altitude_pid = PIDController(2.5, 0.3, 1.2, (-0.8, 0.8))
@@ -105,7 +125,174 @@ class Controller:
         
         self._rtl_started = False
         self._land_started = False
-        logger.info("✓ Controller initialized with precision tuning")
+        logger.info("✓ Controller initialized with A* path optimization")
+
+    def _heuristic(self, pos: np.ndarray, goal: np.ndarray) -> float:
+        """
+        A* heuristic function h(n)
+        Formula: h(n) = sqrt((x_goal - x_n)^2 + (y_goal - y_n)^2) + alpha*|z_goal - z_n|
+        """
+        dx = goal[0] - pos[0]
+        dy = goal[1] - pos[1]
+        dz = goal[2] - pos[2]
+        
+        horizontal_dist = np.sqrt(dx**2 + dy**2)
+        vertical_dist = abs(dz) * self.altitude_weight
+        
+        return horizontal_dist + vertical_dist
+
+    def _path_cost(self, from_pos: np.ndarray, to_pos: np.ndarray) -> float:
+        """
+        Cost function g(n) for A* 
+        Formula: Cost = distance_weight * ||P_i+1 - P_i|| + altitude_weight * |z_i+1 - z_i|
+        """
+        distance = np.linalg.norm(to_pos - from_pos)
+        altitude_change = abs(to_pos[2] - from_pos[2])
+        
+        # Climbing costs more energy than descending
+        if to_pos[2] < from_pos[2]:  # Climbing (negative z is up)
+            energy_cost = altitude_change * self.energy_weight * 1.5
+        else:  # Descending
+            energy_cost = altitude_change * self.energy_weight * 0.5
+        
+        return self.distance_weight * distance + altitude_change * self.altitude_weight + energy_cost
+
+    def _get_path_neighbors(self, pos: np.ndarray, goal: np.ndarray) -> List[np.ndarray]:
+        """Get neighboring positions for A* search"""
+        neighbors = []
+        
+        # Adaptive step size based on distance to goal
+        dist_to_goal = np.linalg.norm(goal - pos)
+        step_size = min(self.grid_resolution * 2, max(0.5, dist_to_goal / 10))
+        
+        # 3D directions prioritizing horizontal movement
+        directions = [
+            # Horizontal (same altitude) - higher priority
+            (1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0),
+            (1, 1, 0), (1, -1, 0), (-1, 1, 0), (-1, -1, 0),
+            # Vertical - lower priority
+            (0, 0, 1), (0, 0, -1),
+            # Diagonal 3D
+            (1, 0, 1), (1, 0, -1), (-1, 0, 1), (-1, 0, -1),
+            (0, 1, 1), (0, 1, -1), (0, -1, 1), (0, -1, -1),
+        ]
+        
+        for dx, dy, dz in directions:
+            # Scale altitude changes to prefer horizontal movement
+            altitude_scale = 0.5 if dz != 0 else 1.0
+            neighbor = pos + np.array([
+                dx * step_size,
+                dy * step_size,
+                dz * step_size * altitude_scale
+            ])
+            
+            # Altitude bounds check
+            if neighbor[2] > 0 or neighbor[2] < -100:
+                continue
+            
+            neighbors.append(neighbor)
+        
+        return neighbors
+
+    def _reconstruct_path(self, node: PathNode, goal: np.ndarray) -> List[np.ndarray]:
+        """Reconstruct path from A* node chain"""
+        path = [goal]  # Add goal first
+        current = node
+        
+        while current.parent is not None:
+            path.append(np.array(current.position))
+            current = current.parent
+        
+        path.reverse()
+        return path
+
+    def _plan_optimal_path(self, start: np.ndarray, goal: np.ndarray, 
+                           max_iterations: int = 3000) -> Optional[List[np.ndarray]]:
+        """
+        A* path planning: finds shortest path minimizing J = sum(Cost(P_i, P_i+1))
+        
+        Formula: f(n) = g(n) + h(n)
+        where g(n) = actual cost from start, h(n) = heuristic to goal
+        """
+        logger.info(f"🔍 Planning optimal path from {start[:2]} to {goal[:2]}")
+        
+        open_list = []
+        closed_set = set()
+        
+        start_tuple = tuple(start)
+        g_start = 0.0
+        h_start = self._heuristic(start, goal)
+        f_start = g_start + h_start
+        start_node = PathNode(f_start, start_tuple, g_start, h_start, None)
+        
+        heapq.heappush(open_list, start_node)
+        g_costs = {start_tuple: 0.0}
+        
+        iterations = 0
+        goal_threshold = self.grid_resolution * 1.5
+        
+        while open_list and iterations < max_iterations:
+            iterations += 1
+            
+            current = heapq.heappop(open_list)
+            current_pos = np.array(current.position)
+            
+            # Goal check
+            if np.linalg.norm(current_pos - goal) < goal_threshold:
+                path = self._reconstruct_path(current, goal)
+                total_distance = sum(np.linalg.norm(path[i+1] - path[i]) 
+                                    for i in range(len(path)-1))
+                logger.info(f"✓ Optimal path found: {len(path)} waypoints, "
+                           f"{total_distance:.1f}m total distance ({iterations} iterations)")
+                return path
+            
+            closed_set.add(current.position)
+            
+            # Expand neighbors
+            for neighbor_pos in self._get_path_neighbors(current_pos, goal):
+                neighbor_tuple = tuple(neighbor_pos)
+                
+                if neighbor_tuple in closed_set:
+                    continue
+                
+                tentative_g = current.g_cost + self._path_cost(current_pos, neighbor_pos)
+                
+                if neighbor_tuple in g_costs and tentative_g >= g_costs[neighbor_tuple]:
+                    continue
+                
+                # Better path found
+                g_costs[neighbor_tuple] = tentative_g
+                h_cost = self._heuristic(neighbor_pos, goal)
+                f_cost = tentative_g + h_cost
+                
+                neighbor_node = PathNode(f_cost, neighbor_tuple, tentative_g, h_cost, current)
+                heapq.heappush(open_list, neighbor_node)
+        
+        logger.warning(f"⚠ No path found after {iterations} iterations, using direct path")
+        return None
+
+    def _optimize_waypoints(self) -> List[np.ndarray]:
+        """Optimize waypoint path using A* between each consecutive pair"""
+        if not self.waypoints or len(self.waypoints) < 2:
+            return self.waypoints
+        
+        optimized_path = [self.launch_position]
+        
+        for i in range(len(self.waypoints)):
+            start = optimized_path[-1]
+            goal = self.waypoints[i]
+            
+            # Run A* between consecutive waypoints
+            segment_path = self._plan_optimal_path(start, goal)
+            
+            if segment_path:
+                # Add path segment (skip first point as it's already in path)
+                optimized_path.extend(segment_path[1:])
+            else:
+                # Fallback: direct path
+                optimized_path.append(goal)
+        
+        return optimized_path
 
     def compute_control(self, drone: Drone, dt: float) -> np.ndarray:
         """Main control computation - dispatches to current flight mode"""
@@ -212,11 +399,11 @@ class Controller:
         return self.control_output
 
     def _auto_mode(self, drone: Drone, dt: float) -> np.ndarray:
-        """Auto mode: follow waypoint mission"""
-        if not self.waypoints or self.mission_complete:
+        """Auto mode: follow optimized waypoint mission"""
+        if not self.optimized_waypoints or self.mission_complete:
             return self._stabilize_mode(drone, dt)
             
-        current_wp = self.waypoints[self.current_waypoint_index]
+        current_wp = self.optimized_waypoints[self.current_waypoint_index]
         current_altitude_m = -drone.estimated_state.position[2]
         target_altitude_m = abs(current_wp[2])
         
@@ -236,11 +423,11 @@ class Controller:
         )
         
         if waypoint_reached:
-            if self.current_waypoint_index < len(self.waypoints) - 1:
+            if self.current_waypoint_index < len(self.optimized_waypoints) - 1:
                 # Advance to next waypoint
                 self.current_waypoint_index += 1
-                next_wp = self.waypoints[self.current_waypoint_index]
-                logger.info(f"✓ Waypoint {self.current_waypoint_index} reached! "
+                next_wp = self.optimized_waypoints[self.current_waypoint_index]
+                logger.info(f"✓ Waypoint {self.current_waypoint_index}/{len(self.optimized_waypoints)} reached! "
                             f"Next: N{next_wp[0]:.1f} E{next_wp[1]:.1f} Alt{abs(next_wp[2]):.1f}m")
                 
                 # Reset PIDs when switching waypoints for clean transition
@@ -379,12 +566,13 @@ class Controller:
     def clear_waypoints(self):
         """Clear all waypoints from mission"""
         self.waypoints = []
+        self.optimized_waypoints = []
         self.current_waypoint_index = 0
         self.mission_complete = False
         logger.info("Waypoints cleared")
         
     def start_mission(self):
-        """Start the waypoint mission"""
+        """Start the waypoint mission with A* path optimization"""
         if not self.waypoints:
             logger.warning("No waypoints set!")
             return
@@ -392,11 +580,20 @@ class Controller:
         if not self.is_launched:
             logger.warning("Not launched yet! Auto-launching to 2m...")
             self.launch(2.0)
+        
+        # Optimize path using A* if enabled
+        if self.use_path_optimization:
+            logger.info("🎯 Optimizing mission path with A* algorithm...")
+            self.optimized_waypoints = self._optimize_waypoints()
+            logger.info(f"📊 Optimization complete: {len(self.waypoints)} user waypoints → "
+                       f"{len(self.optimized_waypoints)} optimized waypoints")
+        else:
+            self.optimized_waypoints = self.waypoints
             
         self.current_waypoint_index = 0
         self.mission_complete = False
         self.set_flight_mode(FlightMode.AUTO)
-        logger.info(f"🎯 Mission started with {len(self.waypoints)} waypoints")
+        logger.info(f"🎯 Mission started with {len(self.optimized_waypoints)} waypoints")
         
     def set_flight_mode(self, mode: FlightMode):
         """Change flight mode and reset controllers"""
@@ -418,6 +615,7 @@ class Controller:
         return {
             'flight_mode': self.flight_mode.value,
             'waypoint_index': self.current_waypoint_index,
+            'total_waypoints': len(self.optimized_waypoints),
             'mission_complete': self.mission_complete,
             'is_launched': self.is_launched,
             'control_output': self.control_output.tolist(),
