@@ -6,7 +6,6 @@ from .utils import FlightMode, logger
 from .drone import Drone
 
 #TODO:
-# fix landing & RTL.
 # Implement wind disturbance model
 
 @dataclass(order=True)
@@ -104,12 +103,12 @@ class Controller:
         self.vel_y_pid = PIDController(0.3, 0.003, 0.08, (-0.4, 0.4))
         self.vel_x_pid.integral_limit = 0.05
         self.vel_y_pid.integral_limit = 0.05
+        
+        # Landing and RTL state tracking
         self._land_started = False
-        self._land_initial_altitude = None
-        self._land_burst_done = False
+        self._land_initial_altitude: Optional[float] = None
         self._rtl_started = False
-        self._rtl_initial_altitude = None
-        self._rtl_burst_done = False
+        self._rtl_initial_altitude: Optional[float] = None
         self._mission_transition_timer = 0.0
         
         logger.info("✓ Controller initialized with conservative PID gains")
@@ -440,154 +439,99 @@ class Controller:
 
         return control
     
-    def _compute_adaptive_landing_throttle(self, drone: Drone, current_altitude: float, mode: str = "LAND") -> float:
+    def _compute_adaptive_landing_throttle(self, drone: Drone, current_altitude: float) -> float:
         hover = float(drone.get_hover_throttle())
-        if mode == "RTL":
-            # RTL wants faster descent overall, but still soft near ground
-            if current_altitude > 5.0:
-                throttle = hover - 0.75
-            elif current_altitude > 3.0:
-                t = (current_altitude - 3.0) / 2.0
-                throttle = hover - (0.60 + 0.15 * t)
-            elif current_altitude > 1.5:
-                t = (current_altitude - 1.5) / 1.5
-                throttle = hover - (0.35 + 0.25 * t)
-            else:
-                # soft curve below 1.5m
-                soft_factor = (current_altitude / 1.5) ** 1.7
-                throttle = hover - (0.05 + 0.25 * soft_factor)
+        # Phase 1: Above 2m - moderate descent
+        if current_altitude > 2.0:
+            throttle = hover - 0.20  # Gentle descent
+        # Phase 2: Between 1m and 2m - slow down
+        elif current_altitude > 1.0:
+            # Linear interpolation from -0.20 to -0.10
+            t = (current_altitude - 1.0) / 1.0  # 0 to 1
+            throttle = hover - (0.10 + 0.10 * t)
+        # Phase 3: Between 0.5m and 1m - very slow
+        elif current_altitude > 0.5:
+            # Linear interpolation from -0.10 to -0.05
+            t = (current_altitude - 0.5) / 0.5  # 0 to 1
+            throttle = hover - (0.05 + 0.05 * t)
+        # Phase 4: Below 0.5m - extremely slow
+        else:
+            # Quadratic curve for final approach
+            soft_factor = (current_altitude / 0.5) ** 2.0
+            throttle = hover - (0.02 + 0.03 * soft_factor)
 
-        else:  # LAND
-            # Start fast but slow sharply below 2m
-            if current_altitude > 3.0:
-                throttle = hover - 0.65
-            elif current_altitude > 2.0:
-                t = (current_altitude - 2.0)
-                throttle = hover - (0.45 + 0.20 * t)
-            elif current_altitude > 1.0:
-                t = (current_altitude - 1.0)
-                throttle = hover - (0.20 + 0.25 * t)
-            else:
-                # smooth nonlinear softening near ground
-                soft_factor = (current_altitude / 1.0) ** 2.0
-                throttle = hover - (0.05 + 0.15 * soft_factor)
-
-        return float(np.clip(throttle, 0.05, 0.95))
-
+        return float(np.clip(throttle, 0.02, 0.95))
 
     def _rtl_mode(self, drone: Drone, dt: float) -> np.ndarray:
         current_pos = drone.estimated_state.position
         current_altitude = -current_pos[2]
         distance_to_home_xy = np.linalg.norm(current_pos[:2] - self.launch_position[:2])
         approach_radius = max(self.waypoint_radius, 1.0)
+        
         if not self._rtl_started:
             self._rtl_started = True
-            self._rtl_burst_done = False
             self._rtl_initial_altitude = float(current_altitude)
-            logger.info(f"RTL: start at {self._rtl_initial_altitude:.2f}m — initial burst enabled")
+            logger.info(f"RTL: Starting from {self._rtl_initial_altitude:.2f}m altitude")
 
-        # initial 1m burst so it doesn't stall in the descent when starting RTL
-        if not self._rtl_burst_done:
-            if self._rtl_initial_altitude - current_altitude >= 1.0 or current_altitude <= 1.0:
-                self._rtl_burst_done = True
-                logger.debug("RTL: initial burst complete")
-            else:
-                hover = float(drone.get_hover_throttle())
-                burst_throttle = float(np.clip(hover - 0.60, 0.02, 0.95))
-                # command simultaneous XY->home and allow throttle burst to descend ~1m quickly
-                self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], -1.0])
-                control = self._stabilize_mode(drone, dt)
-                control[0] = burst_throttle
-                logger.debug(f"RTL burst: alt {current_altitude:.2f} -> throttle {control[0]:.3f}")
-                return control
-
-        # Phase: move toward home XY while descending to 2m (simultaneous XY + altitude)
+        # Phase 1: Fly home while descending smoothly
         if distance_to_home_xy > approach_radius:
-            self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], -2.0])
-            self.setpoints['altitude'] = 2.0
+            # Descend to 2m while flying home
+            target_altitude = max(2.0, min(current_altitude, self._rtl_initial_altitude))
+            self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], 0.0])
+            self.setpoints['altitude'] = target_altitude
             control = self._stabilize_mode(drone, dt)
-            # above 2m we want faster descent (allow control to go lower throttle if needed)
+            
+            # Apply gentle descent throttle if above 2m
             if current_altitude > 2.0:
-                control[0] = float(np.clip(control[0], 0.03, 0.95))
-            logger.debug(f"RTL: enroute to home XY, alt {current_altitude:.2f}, thr {control[0]:.3f}")
+                control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude)
+            
+            logger.debug(f"RTL: Flying home, dist={distance_to_home_xy:.1f}m, alt={current_altitude:.2f}m")
             return control
 
-        # Close to home XY — if above 2m, descend to 2m then soft land
-        if current_altitude > 2.0:
-            self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], -2.0])
-            self.setpoints['altitude'] = 2.0
-            control = self._stabilize_mode(drone, dt)
-            control[0] = float(np.clip(control[0], 0.03, 0.95))
-            logger.debug(f"RTL: co-located XY, descending to 2m, alt {current_altitude:.2f}, thr {control[0]:.3f}")
-            return control
-
-        # Soft-landing at home when <= 2m
+        # Phase 2: Above home - continue smooth descent to ground
         if current_altitude > 0.05:
             self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], 0.0])
             self.setpoints['altitude'] = 0.0
             control = self._stabilize_mode(drone, dt)
-            control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude, mode="RTL")
-            logger.debug(f"RTL: soft-landing from {current_altitude:.2f}m, thr -> {control[0]:.3f}")
+            # Use unified landing throttle
+            control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude)
+            logger.debug(f"RTL: Landing at home, alt={current_altitude:.2f}m, thr={control[0]:.3f}")
             return control
 
-        # Landed
-        logger.info("✓ RTL complete - Landed at launch position")
+        # Phase 3: Landed
+        logger.info("✅ RTL complete - Landed at launch position")
         self.flight_mode = FlightMode.MANUAL
         self.is_launched = False
         self._rtl_started = False
         self._rtl_initial_altitude = None
-        self._rtl_burst_done = False
         return np.zeros(4)
+
     def _land_mode(self, drone: Drone, dt: float) -> np.ndarray:
         current_pos = drone.estimated_state.position
         current_altitude = -current_pos[2]  
+        
         if not self._land_started:
             self._land_started = True
-            self._land_burst_done = False
             self._land_initial_altitude = float(current_altitude)
-            logger.info(f"LAND: start at {self._land_initial_altitude:.2f}m — initial burst enabled")
+            logger.info(f"LAND: Starting from {self._land_initial_altitude:.2f}m altitude")
 
-        # If we haven't done the 1m burst yet, do it until we've dropped ~1.0m
-        if not self._land_burst_done:
-            # If starting altitude < 1m, skip burst
-            if self._land_initial_altitude - current_altitude >= 1.0 or current_altitude <= 1.0:
-                self._land_burst_done = True
-                logger.debug("LAND: initial burst complete")
-            else:
-                # aggressive throttle (fast first-meter descent)
-                hover = float(drone.get_hover_throttle())
-                burst_throttle = float(np.clip(hover - 0.60, 0.02, 0.95))
-                # Keep XY on current position while bursting down
-                self.setpoints['position'] = np.array([current_pos[0], current_pos[1], 0.0])
-                control = self._stabilize_mode(drone, dt)
-                control[0] = burst_throttle
-                logger.debug(f"LAND burst: alt {current_altitude:.2f} -> throttle {control[0]:.3f}")
-                return control
-        if current_altitude > 0.1:
-            self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], 0.0])
-            self.setpoints['altitude'] = 0.0
-            control = self._stabilize_mode(drone, dt)
-            control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude, mode="LAND")
-            logger.debug(f"RTL: adaptive descent from {current_altitude:.2f}m, thr -> {control[0]:.3f}")
-            return control
-
-        # Soft-landing phase when <= 2.0m: use soft throttle curve
+        # Smooth descent from current altitude to ground
         if current_altitude > 0.05:
-            # lock XY, then apply soft throttle mapping
+            # Lock XY position, descend to ground
             self.setpoints['position'] = np.array([current_pos[0], current_pos[1], 0.0])
             self.setpoints['altitude'] = 0.0
             control = self._stabilize_mode(drone, dt)
-            control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude, mode="LAND")
-            logger.debug(f"LAND: soft-landing from {current_altitude:.2f}m, thr -> {control[0]:.3f}")
+            # Use unified landing throttle
+            control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude)
+            logger.debug(f"LAND: Descending, alt={current_altitude:.2f}m, thr={control[0]:.3f}")
             return control
 
         # Landed
-        logger.info("✓ Land complete - landed at current position")
+        logger.info("✅ LAND complete - Landed at current position")
         self.flight_mode = FlightMode.MANUAL
         self.is_launched = False
         self._land_started = False
         self._land_initial_altitude = None
-        self._land_burst_done = False
         return np.zeros(4)
 
     def set_launch_position(self, north: float, east: float, altitude: float = 0.0):
