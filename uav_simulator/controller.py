@@ -440,40 +440,50 @@ class Controller:
         return control
     
     def _compute_adaptive_landing_throttle(self, drone: Drone, current_altitude: float) -> float:
+        """
+        Unified landing throttle profile for consistent descent rates.
+        Descent profile: ~0.5 m/s above 2m, ~0.3 m/s from 2-1m, ~0.15 m/s below 1m
+        """
         hover = float(drone.get_hover_throttle())
-        # Phase 1: Above 2m - moderate descent
+        
+        # Phase 1: Above 2m - steady moderate descent (~0.5 m/s)
         if current_altitude > 2.0:
-            throttle = hover - 0.20  # Gentle descent
-        # Phase 2: Between 1m and 2m - slow down
+            throttle = hover - 0.12  # Moderate descent rate
+        # Phase 2: Between 1m and 2m - slow down gradually (~0.3 m/s)
         elif current_altitude > 1.0:
-            # Linear interpolation from -0.20 to -0.10
+            # Linear interpolation from -0.12 to -0.08
             t = (current_altitude - 1.0) / 1.0  # 0 to 1
-            throttle = hover - (0.10 + 0.10 * t)
-        # Phase 3: Between 0.5m and 1m - very slow
-        elif current_altitude > 0.5:
-            # Linear interpolation from -0.10 to -0.05
-            t = (current_altitude - 0.5) / 0.5  # 0 to 1
-            throttle = hover - (0.05 + 0.05 * t)
-        # Phase 4: Below 0.5m - extremely slow
+            throttle = hover - (0.08 + 0.04 * t)
+        # Phase 3: Between 0.3m and 1m - very slow (~0.15 m/s)
+        elif current_altitude > 0.3:
+            # Linear interpolation from -0.08 to -0.04
+            t = (current_altitude - 0.3) / 0.7  # 0 to 1
+            throttle = hover - (0.04 + 0.04 * t)
+        # Phase 4: Below 0.3m - extremely slow final approach (~0.05 m/s)
         else:
-            # Quadratic curve for final approach
-            soft_factor = (current_altitude / 0.5) ** 2.0
-            throttle = hover - (0.02 + 0.03 * soft_factor)
+            # Gentle touchdown
+            soft_factor = (current_altitude / 0.3) ** 1.5
+            throttle = hover - (0.02 + 0.02 * soft_factor)
 
-        return float(np.clip(throttle, 0.02, 0.95))
+        return float(np.clip(throttle, 0.1, 0.95))
 
     def _rtl_mode(self, drone: Drone, dt: float) -> np.ndarray:
+        """
+        RTL mode: Return to launch position and land with consistent descent profile.
+        Phase 1: Fly home while descending to 2m
+        Phase 2: Once at home position, descend smoothly to ground
+        """
         current_pos = drone.estimated_state.position
         current_altitude = -current_pos[2]
         distance_to_home_xy = np.linalg.norm(current_pos[:2] - self.launch_position[:2])
-        approach_radius = max(self.waypoint_radius, 1.0)
+        approach_radius = max(self.waypoint_radius, 1.5)  # Larger radius for smoother transitions
         
         if not self._rtl_started:
             self._rtl_started = True
             self._rtl_initial_altitude = float(current_altitude)
             logger.info(f"RTL: Starting from {self._rtl_initial_altitude:.2f}m altitude")
 
-        # Phase 1: Fly home while descending smoothly
+        # Phase 1: Fly home while descending to 2m
         if distance_to_home_xy > approach_radius:
             # Descend to 2m while flying home
             target_altitude = max(2.0, min(current_altitude, self._rtl_initial_altitude))
@@ -488,13 +498,16 @@ class Controller:
             logger.debug(f"RTL: Flying home, dist={distance_to_home_xy:.1f}m, alt={current_altitude:.2f}m")
             return control
 
-        # Phase 2: Above home - continue smooth descent to ground
+        # Phase 2: At home position - descend to ground with unified landing profile
         if current_altitude > 0.05:
+            # Lock position at home, descend smoothly
             self.setpoints['position'] = np.array([self.launch_position[0], self.launch_position[1], 0.0])
             self.setpoints['altitude'] = 0.0
             control = self._stabilize_mode(drone, dt)
-            # Use unified landing throttle
+            
+            # Use unified landing throttle for consistent descent
             control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude)
+            
             logger.debug(f"RTL: Landing at home, alt={current_altitude:.2f}m, thr={control[0]:.3f}")
             return control
 
@@ -507,22 +520,28 @@ class Controller:
         return np.zeros(4)
 
     def _land_mode(self, drone: Drone, dt: float) -> np.ndarray:
+        """
+        LAND mode: Descend at current position with consistent landing profile.
+        Uses same descent rates as RTL for predictable behavior.
+        """
         current_pos = drone.estimated_state.position
         current_altitude = -current_pos[2]  
         
         if not self._land_started:
             self._land_started = True
             self._land_initial_altitude = float(current_altitude)
-            logger.info(f"LAND: Starting from {self._land_initial_altitude:.2f}m altitude")
+            logger.info(f"LAND: Starting descent from {self._land_initial_altitude:.2f}m altitude")
 
         # Smooth descent from current altitude to ground
         if current_altitude > 0.05:
-            # Lock XY position, descend to ground
+            # Lock XY position at current location, descend to ground
             self.setpoints['position'] = np.array([current_pos[0], current_pos[1], 0.0])
             self.setpoints['altitude'] = 0.0
             control = self._stabilize_mode(drone, dt)
-            # Use unified landing throttle
+            
+            # Use unified landing throttle for consistent, safe descent
             control[0] = self._compute_adaptive_landing_throttle(drone, current_altitude)
+            
             logger.debug(f"LAND: Descending, alt={current_altitude:.2f}m, thr={control[0]:.3f}")
             return control
 
